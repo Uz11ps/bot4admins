@@ -1,0 +1,30 @@
+{% extends "bot_base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Единый портал ботов</h1>
+    <p>5 независимых модуля по отдельным ссылкам, с функционалом действующих Telegram-ботов.</p>
+</section>
+
+<section class="grid">
+    <a class="module-card bot-card" href="/bot/meeting">
+        <div class="title">1. Бронирование переговорных</div>
+        <div class="stats"><span>Регистрация, брони, отмена, роли</span></div>
+    </a>
+    <a class="module-card bot-card" href="/bot/broker">
+        <div class="title">2. Бронирование брокеров</div>
+        <div class="stats"><span>Календарь, брони, отмена, роли</span></div>
+    </a>
+    <a class="module-card bot-card" href="/bot/order">
+        <div class="title">3. Кассовые документы (ПКО/РКО)</div>
+        <div class="stats"><span>Регистрация по паролю, заявки, статусы</span></div>
+    </a>
+    <a class="module-card bot-card" href="/bot/contracts">
+        <div class="title">4. Реестр и нумерация договоров</div>
+        <div class="stats"><span>Создание, автонумерация, шаблоны</span></div>
+    </a>
+    <a class="module-card bot-card" href="/bot/docflow">
+        <div class="title">5. Протокол + документы + Яндекс.Диск</div>
+        <div class="stats"><span>Регистрация, заявки, маршрут статусов</span></div>
+    </a>
+</section>
+{% endblock %}

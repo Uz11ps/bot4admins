@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="login-body">
+<div class="login-card">
+    <h1>Infinity Admin</h1>
+    <p>Единая веб-админка для всех ботов</p>
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login">
+        <label>Логин</label>
+        <input type="text" name="username" required>
+        <label>Пароль</label>
+        <input type="password" name="password" required>
+        <button type="submit">Войти</button>
+    </form>
+</div>
+</body>
+</html>

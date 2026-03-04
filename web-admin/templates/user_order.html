@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Пользователь: ПКО/РКО</h1>
+    <p>Регистрация по паролю, создание заявок, просмотр своих статусов.</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация</h2>
+    <form class="inline-form" method="post" action="/user/order/register">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Вход</h2>
+    <form class="inline-form" method="post" action="/user/order/login">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <button type="submit">Войти</button>
+    </form>
+    {% if current_id %}<div class="meta" style="margin-top:8px">Вы вошли как: {{ current_id }}</div>{% endif %}
+</section>
+
+{% if current_id %}
+<section class="table-wrapper">
+    <h2>Создать заявку</h2>
+    <form class="inline-form" method="post" action="/user/order/create">
+        <select name="doc_type"><option value="ПКО">ПКО</option><option value="РКО">РКО</option></select>
+        <input type="text" name="order_date" placeholder="Дата (ДД.ММ.ГГГГ)" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="basis_type" placeholder="Основание" required>
+        <input type="text" name="contract_number" placeholder="№ договора" required>
+        <input type="text" name="contract_date" placeholder="Дата договора" required>
+        <input type="number" step="0.01" name="amount" placeholder="Сумма" required>
+        <button type="submit">Отправить</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Мои заявки</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Тип</th><th>Номер</th><th>Дата</th><th>Сумма</th><th>Статус</th><th>Комментарий</th></tr></thead>
+        <tbody>
+        {% for r in requests %}
+            <tr><td>{{ r.id }}</td><td>{{ r.doc_type }}</td><td>{{ r.doc_number }}</td><td>{{ r.date }}</td><td>{{ r.amount }}</td><td>{{ r.status }}</td><td>{{ r.comment }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endblock %}

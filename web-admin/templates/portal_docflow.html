@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Протокол + документы + Яндекс.Диск</h1>
+    <p>Регистрация с подтверждением, заявки, статусы маршрута и управление.</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация сотрудника</h2>
+    <form class="inline-form" method="post" action="/portal/docflow/register">
+        <input type="text" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department_no" placeholder="Отдел" required>
+        <button type="submit">Отправить на подтверждение</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Подтверждение сотрудника (ROP)</h2>
+    <form class="inline-form" method="post" action="/portal/docflow/approve-user">
+        <input type="text" name="telegram_id" placeholder="Telegram ID" required>
+        <select name="decision">
+            <option value="approve">Подтвердить</option>
+            <option value="reject">Отклонить</option>
+        </select>
+        <button type="submit">Применить</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Создать заявку</h2>
+    <form class="inline-form" method="post" action="/portal/docflow/create">
+        <input type="text" name="agent_telegram_id" placeholder="Telegram ID агента" required>
+        <input type="text" name="deal_type" placeholder="Тип сделки" required>
+        <input type="text" name="contract_no" placeholder="№ договора">
+        <input type="text" name="address" placeholder="Адрес">
+        <input type="text" name="object_type" placeholder="Тип объекта">
+        <input type="text" name="head_name" placeholder="Руководитель">
+        <button type="submit">Создать заявку</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Изменить статус заявки</h2>
+    <form class="inline-form" method="post" action="/portal/docflow/status">
+        <input type="number" name="app_id" placeholder="ID заявки" required>
+        <select name="status">
+            <option value="CREATED">CREATED</option>
+            <option value="RETURNED_ROP">RETURNED_ROP</option>
+            <option value="TO_LAWYER">TO_LAWYER</option>
+            <option value="LAWYER_TASK">LAWYER_TASK</option>
+            <option value="CLOSED">CLOSED</option>
+        </select>
+        <button type="submit">Обновить статус</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Пользователи в ожидании подтверждения</h2>
+    <table>
+        <thead><tr><th>Telegram ID</th><th>ФИО</th><th>Отдел</th><th>Роль</th></tr></thead>
+        <tbody>
+            {% for u in pending_users %}
+            <tr><td>{{ u.telegram_id }}</td><td>{{ u.full_name }}</td><td>{{ u.department_no }}</td><td>{{ u.role }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="table-wrapper">
+    <h2>Заявки</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Тип сделки</th><th>№ договора</th><th>Агент</th><th>Статус</th><th>Создано</th></tr></thead>
+        <tbody>
+            {% for a in applications %}
+            <tr><td>{{ a.id }}</td><td>{{ a.deal_type }}</td><td>{{ a.contract_no }}</td><td>{{ a.agent_name }}</td><td>{{ a.status }}</td><td>{{ a.created_at }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

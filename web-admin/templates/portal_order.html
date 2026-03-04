@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Кассовые документы (ПКО/РКО)</h1>
+    <p>Регистрация, создание заявок, статусы согласования.</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация пользователя</h2>
+    <form class="inline-form" method="post" action="/portal/order/register">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <button type="submit">Зарегистрировать</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Создать заявку ПКО/РКО</h2>
+    <form class="inline-form" method="post" action="/portal/order/create">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <select name="doc_type">
+            <option value="ПКО">ПКО</option>
+            <option value="РКО">РКО</option>
+        </select>
+        <input type="text" name="order_date" placeholder="Дата (ДД.ММ.ГГГГ)" required>
+        <input type="text" name="full_name" placeholder="ФИО плательщика/получателя" required>
+        <input type="text" name="basis_type" placeholder="Тип основания" required>
+        <input type="text" name="contract_number" placeholder="№ договора" required>
+        <input type="text" name="contract_date" placeholder="Дата договора" required>
+        <input type="number" step="0.01" name="amount" placeholder="Сумма" required>
+        <button type="submit">Создать</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Смена статуса заявки</h2>
+    <form class="inline-form" method="post" action="/portal/order/status">
+        <input type="number" name="order_id" placeholder="ID заявки" required>
+        <select name="status">
+            <option value="на рассмотрении">на рассмотрении</option>
+            <option value="одобрено">одобрено</option>
+            <option value="отклонено">отклонено</option>
+        </select>
+        <input type="text" name="comment" placeholder="Комментарий">
+        <button type="submit">Обновить статус</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Заявки</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Тип</th><th>Номер</th><th>User</th><th>Дата</th><th>ФИО</th><th>Сумма</th><th>Статус</th><th>Комментарий</th><th>Документ</th><th>Яндекс.Диск</th></tr></thead>
+        <tbody>
+            {% for r in requests %}
+            <tr><td>{{ r.id }}</td><td>{{ r.doc_type }}</td><td>{{ r.doc_number }}</td><td>{{ r.user_id }}</td><td>{{ r.date }}</td><td>{{ r.full_name }}</td><td>{{ r.amount }}</td><td>{{ r.status }}</td><td>{{ r.comment }}</td><td>{% if r.status == 'одобрено' %}<a href="/portal/order/document/{{ r.id }}">Скачать</a>{% else %}-{% endif %}</td><td>{% if r.status == 'одобрено' %}<a href="/portal/order/document/{{ r.id }}/yadisk" target="_blank" rel="noopener noreferrer">Открыть</a>{% else %}-{% endif %}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

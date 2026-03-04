@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Пользовательский портал</h1>
+    <p>Раздел для обычного сотрудника: действия как в Telegram-ботах, по отдельным модулям.</p>
+</section>
+
+<section class="grid">
+    <a class="module-card" href="/user/meeting">
+        <div class="title">Модуль 1: Бронирование переговорных</div>
+        <div class="status ok">Открыть</div>
+    </a>
+    <a class="module-card" href="/user/order">
+        <div class="title">Модуль 2: Кассовые документы (ПКО/РКО)</div>
+        <div class="status ok">Открыть</div>
+    </a>
+    <a class="module-card" href="/user/contracts">
+        <div class="title">Модуль 3: Реестр договоров</div>
+        <div class="status ok">Открыть</div>
+    </a>
+    <a class="module-card" href="/user/docflow">
+        <div class="title">Модуль 4: Протокол + документы + Яндекс.Диск</div>
+        <div class="status ok">Открыть</div>
+    </a>
+</section>
+{% endblock %}

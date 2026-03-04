@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Пользователь: Реестр договоров</h1>
+    <p>Регистрация, создание договора, мои и активные договоры.</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация</h2>
+    <form class="inline-form" method="post" action="/user/contracts/register">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Вход</h2>
+    <form class="inline-form" method="post" action="/user/contracts/login">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <button type="submit">Войти</button>
+    </form>
+    {% if current_id %}<div class="meta" style="margin-top:8px">Вы вошли как: {{ current_id }}</div>{% endif %}
+</section>
+
+<section class="table-wrapper">
+    <h2>Шаблоны договоров</h2>
+    <table>
+        <thead><tr><th>Файл</th><th>Скачать</th></tr></thead>
+        <tbody>
+        {% for t in templates_list %}
+            <tr><td>{{ t.name }}</td><td><a href="/portal/contracts/template?path={{ t.path }}">Скачать</a></td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+{% if current_id %}
+<section class="table-wrapper">
+    <h2>Создать договор</h2>
+    <form class="inline-form" method="post" action="/user/contracts/create">
+        <input type="text" name="form" placeholder="Форма договора" required>
+        <input type="text" name="address" placeholder="Адрес" required>
+        <button type="submit">Создать</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Мои договоры</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Номер</th><th>Дата</th><th>Форма</th><th>Адрес</th><th>Статус</th></tr></thead>
+        <tbody>
+        {% for c in mine %}
+            <tr><td>{{ c.id }}</td><td>{{ c.number }}</td><td>{{ c.date }}</td><td>{{ c.form }}</td><td>{{ c.address }}</td><td>{{ c.status }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="table-wrapper">
+    <h2>Активные (Не подписан)</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Номер</th><th>Дата</th><th>Форма</th><th>Адрес</th><th>Статус</th></tr></thead>
+        <tbody>
+        {% for c in active %}
+            <tr><td>{{ c.id }}</td><td>{{ c.number }}</td><td>{{ c.date }}</td><td>{{ c.form }}</td><td>{{ c.address }}</td><td>{{ c.status }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endblock %}

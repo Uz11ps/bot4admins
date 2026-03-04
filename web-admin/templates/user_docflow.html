@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Пользователь: Протокол и документы</h1>
+    <p>Регистрация, создание заявки и просмотр своих заявок по маршруту.</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация</h2>
+    <form class="inline-form" method="post" action="/user/docflow/register">
+        <input type="text" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department_no" placeholder="Отдел" required>
+        <button type="submit">Отправить на подтверждение РОП</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Вход</h2>
+    <form class="inline-form" method="post" action="/user/docflow/login">
+        <input type="text" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <button type="submit">Войти</button>
+    </form>
+    {% if current_id %}<div class="meta" style="margin-top:8px">Вы вошли как: {{ current_id }}</div>{% endif %}
+</section>
+
+{% if current_id %}
+<section class="table-wrapper">
+    <h2>Создать заявку</h2>
+    <form class="inline-form" method="post" action="/user/docflow/create">
+        <input type="text" name="deal_type" placeholder="Тип сделки" required>
+        <input type="text" name="contract_no" placeholder="№ договора">
+        <input type="text" name="address" placeholder="Адрес">
+        <input type="text" name="object_type" placeholder="Тип объекта">
+        <input type="text" name="head_name" placeholder="Руководитель">
+        <button type="submit">Создать заявку</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Мои заявки</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Тип сделки</th><th>№ договора</th><th>Агент</th><th>Статус</th><th>Создано</th></tr></thead>
+        <tbody>
+        {% for a in applications %}
+            <tr><td>{{ a.id }}</td><td>{{ a.deal_type }}</td><td>{{ a.contract_no }}</td><td>{{ a.agent_name }}</td><td>{{ a.status }}</td><td>{{ a.created_at }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endblock %}

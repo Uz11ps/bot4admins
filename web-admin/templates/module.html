@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>{{ module_title }}</h1>
+    <p>Детальная информация по модулю.</p>
+</section>
+
+{% if message %}
+<div class="success">{{ message }}</div>
+{% endif %}
+{% if error_message %}
+<div class="error">{{ error_message }}</div>
+{% endif %}
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% else %}
+<section class="cards">
+    {% for key, value in stats.items() %}
+    <div class="card">
+        <div class="label">{{ key }}</div>
+        <div class="value">{{ value }}</div>
+    </div>
+    {% endfor %}
+</section>
+
+<section class="table-wrapper">
+    <table>
+        <thead>
+            <tr>
+                {% for col in columns %}
+                <th>{{ col }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in rows %}
+            <tr>
+                {% for col in columns %}
+                <td>
+                    {% if module_key == "order" and col == "document" %}
+                        {% if row[col] %}
+                            <a href="{{ row[col] }}">Скачать</a>
+                        {% else %}
+                            -
+                        {% endif %}
+                    {% else %}
+                        {{ row[col] }}
+                    {% endif %}
+                </td>
+                {% endfor %}
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+{% for block in management_blocks %}
+<section class="table-wrapper">
+    <h2>{{ block.title }}</h2>
+    <table>
+        <thead>
+            <tr>
+                {% for col in block.columns %}
+                <th>{{ col }}</th>
+                {% endfor %}
+                <th>Действие</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in block.rows %}
+            <tr>
+                {% for col in block.columns %}
+                <td>{{ row[col] }}</td>
+                {% endfor %}
+                <td>
+                    <form class="inline-form" method="post" action="/modules/{{ module_key }}/actions/{{ block.action.name }}">
+                        <input
+                            type="hidden"
+                            name="{{ block.action.target_field }}"
+                            value="{{ row[block.action.target_value_field or block.action.target_field] }}"
+                        >
+                        {% for input in block.action.inputs %}
+                            {% if input.type == "select" %}
+                            <select name="{{ input.name }}">
+                                {% for option in input.options %}
+                                <option value="{{ option.value }}">{{ option.label }}</option>
+                                {% endfor %}
+                            </select>
+                            {% elif input.type == "number" %}
+                            <input type="number" name="{{ input.name }}" min="{{ input.min or '0' }}" required>
+                            {% else %}
+                            <input type="text" name="{{ input.name }}" placeholder="{{ input.placeholder or input.label }}">
+                            {% endif %}
+                        {% endfor %}
+                        <button type="submit">{{ block.action.submit_label }}</button>
+                    </form>
+                </td>
+            </tr>
+        {% endfor %}
+        {% if not block.rows %}
+            <tr>
+                <td colspan="{{ block.columns|length + 1 }}">Нет данных в таблице. Используйте ручную форму управления ниже.</td>
+            </tr>
+        {% endif %}
+        </tbody>
+    </table>
+
+    <div class="manual-action">
+        <div class="manual-action-title">Ручное управление</div>
+        <form class="inline-form" method="post" action="/modules/{{ module_key }}/actions/{{ block.action.name }}">
+            <input
+                type="text"
+                name="{{ block.action.manual_target_name or block.action.target_field }}"
+                placeholder="{{ block.action.manual_target_label or block.action.target_field }}"
+                required
+            >
+            {% for input in block.action.inputs %}
+                {% if input.type == "select" %}
+                <select name="{{ input.name }}">
+                    {% for option in input.options %}
+                    <option value="{{ option.value }}">{{ option.label }}</option>
+                    {% endfor %}
+                </select>
+                {% elif input.type == "number" %}
+                <input type="number" name="{{ input.name }}" min="{{ input.min or '0' }}" required>
+                {% else %}
+                <input type="text" name="{{ input.name }}" placeholder="{{ input.placeholder or input.label }}">
+                {% endif %}
+            {% endfor %}
+            <button type="submit">{{ block.action.submit_label }}</button>
+        </form>
+    </div>
+</section>
+{% endfor %}
+{% endif %}
+{% endblock %}

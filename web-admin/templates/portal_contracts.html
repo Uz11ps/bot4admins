@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Реестр и нумерация договоров</h1>
+    <p>Регистрация, создание договора, статус и библиотека шаблонов.</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация пользователя</h2>
+    <form class="inline-form" method="post" action="/portal/contracts/register">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <button type="submit">Зарегистрировать</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Создать договор</h2>
+    <form class="inline-form" method="post" action="/portal/contracts/create">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="text" name="form" placeholder="Форма договора" required>
+        <input type="text" name="address" placeholder="Адрес" required>
+        <button type="submit">Создать</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Изменить статус договора</h2>
+    <form class="inline-form" method="post" action="/portal/contracts/status">
+        <input type="number" name="contract_id" placeholder="ID договора" required>
+        <select name="status">
+            <option value="Не подписан">Не подписан</option>
+            <option value="Подписан">Подписан</option>
+            <option value="Аннулирован">Аннулирован</option>
+        </select>
+        <button type="submit">Обновить</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Шаблоны договоров (DOCX)</h2>
+    <table>
+        <thead><tr><th>Файл</th><th>Скачать</th></tr></thead>
+        <tbody>
+            {% for t in templates_list %}
+            <tr><td>{{ t.name }}</td><td><a href="/portal/contracts/template?path={{ t.path }}">Скачать</a></td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="table-wrapper">
+    <h2>Все договоры</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Номер</th><th>User</th><th>Дата</th><th>Форма</th><th>Адрес</th><th>Статус</th></tr></thead>
+        <tbody>
+            {% for c in contracts %}
+            <tr><td>{{ c.id }}</td><td>{{ c.number }}</td><td>{{ c.user_id }}</td><td>{{ c.date }}</td><td>{{ c.form }}</td><td>{{ c.address }}</td><td>{{ c.status }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="table-wrapper">
+    <h2>Активные договоры (Не подписан)</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Номер</th><th>User</th><th>Дата</th><th>Форма</th><th>Адрес</th><th>Статус</th></tr></thead>
+        <tbody>
+            {% for c in active_contracts %}
+            <tr><td>{{ c.id }}</td><td>{{ c.number }}</td><td>{{ c.user_id }}</td><td>{{ c.date }}</td><td>{{ c.form }}</td><td>{{ c.address }}</td><td>{{ c.status }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

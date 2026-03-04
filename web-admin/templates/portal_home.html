@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Единый веб-портал модулей</h1>
+    <p>Функционал ботов разделен на независимые веб-модули по отдельным ссылкам.</p>
+</section>
+
+<section class="grid">
+    <a class="module-card" href="/portal/meeting">
+        <div class="title">1. Бронирование переговорных</div>
+        <div class="status ok">Открыть модуль</div>
+    </a>
+    <a class="module-card" href="/portal/broker">
+        <div class="title">2. Бронирование брокеров</div>
+        <div class="status ok">Открыть модуль</div>
+    </a>
+    <a class="module-card" href="/portal/order">
+        <div class="title">3. Кассовые документы (ПКО/РКО)</div>
+        <div class="status ok">Открыть модуль</div>
+    </a>
+    <a class="module-card" href="/portal/contracts">
+        <div class="title">4. Реестр и нумерация договоров</div>
+        <div class="status ok">Открыть модуль</div>
+    </a>
+    <a class="module-card" href="/portal/docflow">
+        <div class="title">5. Протокол + документы + Яндекс.Диск</div>
+        <div class="status ok">Открыть модуль</div>
+    </a>
+</section>
+{% endblock %}

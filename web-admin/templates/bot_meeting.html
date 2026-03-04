@@ -1,0 +1,219 @@
+{% extends "bot_base.html" %}
+{% block extra_head %}
+<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.17/main.min.css" rel="stylesheet">
+{% endblock %}
+{% block content %}
+<section class="page-header"><h1>Бронирование переговорных</h1></section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация</h2>
+    <form class="inline-form" method="post" action="/bot/meeting/register">
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="password" name="account_password" placeholder="Пароль аккаунта" required>
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+</section>
+<section class="table-wrapper">
+    <h2>Вход</h2>
+    <form class="inline-form" method="post" action="/bot/meeting/login">
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <button type="submit">Войти</button>
+    </form>
+    {% if current_id %}<div class="meta" style="margin-top:8px">ID: {{ current_id }} ({{ current_role }})</div>{% endif %}
+</section>
+{% if current_id %}
+<section class="table-wrapper">
+    <h2>Создать бронь</h2>
+    <div class="meta" style="margin-bottom:10px">Если выбранное время уже занято по этой переговорной, система покажет ошибку и не даст создать бронь.</div>
+    <form class="inline-form" method="post" action="/bot/meeting/create-booking">
+        <select name="room_id" required>
+            <option value="" disabled selected>Выберите переговорную</option>
+            {% for room in rooms %}
+            <option value="{{ room.id }}">{{ room.name }} ({{ room.capacity }} мест{% if room.room_type %}, {{ room.room_type }}{% endif %})</option>
+            {% endfor %}
+        </select>
+        <input type="datetime-local" name="start_time" required>
+        <input type="datetime-local" name="end_time" required>
+        <input type="text" name="title" placeholder="Название" required>
+        <button type="submit">Забронировать</button>
+    </form>
+</section>
+{% if can_manage_roles %}
+<section class="table-wrapper">
+    <h2>Роли пользователей</h2>
+    <form class="inline-form" method="post" action="/bot/meeting/update-role">
+        <input type="email" name="email" placeholder="Email пользователя" required>
+        <select name="role" required>
+            <option value="user">user</option>
+            <option value="hr">hr</option>
+            <option value="head">head</option>
+            <option value="admin">admin</option>
+        </select>
+        <button type="submit">Сменить роль</button>
+    </form>
+    <table style="margin-top:10px"><thead><tr><th>Email</th><th>ФИО</th><th>Отдел</th><th>Роль</th></tr></thead><tbody>
+    {% for u in users_with_email %}
+        <tr><td>{{ u.email or '-' }}</td><td>{{ u.full_name }}</td><td>{{ u.department }}</td><td>{{ u.role }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+</section>
+{% endif %}
+<section class="table-wrapper">
+    <h2>Мои брони</h2>
+    <table><thead><tr><th>ID</th><th>Комната</th><th>Старт</th><th>Финиш</th><th>Тема</th><th></th></tr></thead><tbody>
+    {% for b in my_bookings %}
+        <tr><td>{{ b.id }}</td><td>{{ b.room_name }}</td><td>{{ b.start_time }}</td><td>{{ b.end_time }}</td><td>{{ b.title }}</td><td>
+            <form class="inline-form" method="post" action="/bot/meeting/cancel-booking"><input type="hidden" name="booking_id" value="{{ b.id }}"><button type="submit">Отменить</button></form>
+        </td></tr>
+    {% endfor %}
+    </tbody></table>
+</section>
+<section class="table-wrapper">
+    <h2>Календарь занятости и все брони</h2>
+    <div id="meeting-calendar"></div>
+    <div id="meeting-calendar-legend" class="meeting-calendar-legend"></div>
+</section>
+<section class="table-wrapper">
+    <h2>Календари по каждой переговорной</h2>
+    <div id="room-calendars" class="room-calendars-grid"></div>
+</section>
+<section class="table-wrapper">
+    <h2>Список всех броней</h2>
+    <table><thead><tr><th>Комната</th><th>Старт</th><th>Финиш</th><th>Тема</th><th>Сотрудник</th></tr></thead><tbody>
+    {% for b in all_bookings %}
+        <tr><td>{{ b.room_name }}</td><td>{{ b.start_time }}</td><td>{{ b.end_time }}</td><td>{{ b.title }}</td><td>{{ b.full_name }}</td></tr>
+    {% endfor %}
+    </tbody></table>
+</section>
+{% endif %}
+{% endblock %}
+{% block extra_scripts %}
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.17/index.global.min.js"></script>
+<script>
+(() => {
+    const el = document.getElementById("meeting-calendar");
+    if (!el) return;
+
+    const rows = {{ all_bookings | tojson }};
+    const rooms = {{ rooms | tojson }};
+    const legendEl = document.getElementById("meeting-calendar-legend");
+    const roomCalendarsEl = document.getElementById("room-calendars");
+    const roomColors = new Map();
+    const palette = [
+        "#5b8cff", "#21c2a8", "#f59e0b", "#a78bfa", "#ef5da8",
+        "#14b8a6", "#f97316", "#22c55e", "#38bdf8", "#fb7185"
+    ];
+
+    function roomColor(name) {
+        if (!name) return "#5b8cff";
+        if (roomColors.has(name)) return roomColors.get(name);
+        const index = roomColors.size % palette.length;
+        roomColors.set(name, palette[index]);
+        return palette[index];
+    }
+
+    const events = rows.map((b) => {
+        const room = b.room_name || "Переговорная";
+        const employee = b.full_name || "Сотрудник";
+        const title = b.title || "Бронь";
+        const color = roomColor(room);
+        return {
+            id: String(b.id || ""),
+            title: room + ": " + title,
+            start: b.start_time,
+            end: b.end_time,
+            backgroundColor: color,
+            borderColor: color,
+            textColor: "#ffffff",
+            extendedProps: {
+                room_name: room,
+                full_name: employee,
+                source_title: title
+            }
+        };
+    });
+
+    const calendar = new FullCalendar.Calendar(el, {
+        locale: "ru",
+        timeZone: "local",
+        initialView: "dayGridMonth",
+        headerToolbar: {
+            left: "prev,next today",
+            center: "title",
+            right: "dayGridMonth,timeGridWeek,timeGridDay,listWeek"
+        },
+        buttonText: {
+            today: "Сегодня",
+            month: "Месяц",
+            week: "Неделя",
+            day: "День",
+            list: "Список"
+        },
+        slotMinTime: "08:00:00",
+        slotMaxTime: "23:00:00",
+        nowIndicator: true,
+        events,
+        eventTimeFormat: { hour: "2-digit", minute: "2-digit", hour12: false },
+        eventDidMount: function(info) {
+            const p = info.event.extendedProps;
+            info.el.title = p.room_name + "\n" + p.source_title + "\n" + p.full_name;
+        }
+    });
+    calendar.render();
+
+    if (legendEl) {
+        const items = Array.from(roomColors.entries()).sort((a, b) => a[0].localeCompare(b[0], "ru"));
+        legendEl.innerHTML = items.map(([name, color]) =>
+            '<span class="legend-item"><i style="background:' + color + '"></i>' + name + "</span>"
+        ).join("");
+    }
+
+    if (roomCalendarsEl) {
+        const byRoom = new Map();
+        rows.forEach((b) => {
+            const key = b.room_name || "Переговорная";
+            if (!byRoom.has(key)) byRoom.set(key, []);
+            byRoom.get(key).push(b);
+        });
+        const sortedRooms = (rooms || []).slice().sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ru"));
+        sortedRooms.forEach((room, idx) => {
+            const roomName = room.name || ("Переговорная " + (idx + 1));
+            const roomId = "room-cal-" + (room.id || idx);
+            const color = roomColor(roomName);
+            const card = document.createElement("div");
+            card.className = "room-calendar-card";
+            card.innerHTML = '<div class=\"room-calendar-title\"><span class=\"dot\" style=\"background:' + color + '\"></span>' + roomName + '</div><div id=\"' + roomId + '\" class=\"room-calendar\"></div>';
+            roomCalendarsEl.appendChild(card);
+            const roomEvents = (byRoom.get(roomName) || []).map((b) => ({
+                id: String(b.id || ""),
+                title: b.title || "Бронь",
+                start: b.start_time,
+                end: b.end_time,
+                backgroundColor: color,
+                borderColor: color,
+                textColor: "#ffffff"
+            }));
+            const roomCal = new FullCalendar.Calendar(document.getElementById(roomId), {
+                locale: "ru",
+                initialView: "timeGridDay",
+                headerToolbar: { left: "prev,next today", center: "title", right: "timeGridDay,timeGridWeek" },
+                buttonText: { today: "Сегодня", day: "День", week: "Неделя" },
+                slotMinTime: "08:00:00",
+                slotMaxTime: "23:00:00",
+                nowIndicator: true,
+                allDaySlot: false,
+                height: 360,
+                events: roomEvents,
+                eventTimeFormat: { hour: "2-digit", minute: "2-digit", hour12: false }
+            });
+            roomCal.render();
+        });
+    }
+})();
+</script>
+{% endblock %}

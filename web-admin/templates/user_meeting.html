@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Пользователь: Бронирование переговорных</h1>
+    <p>Регистрация, вход, создание и отмена своих броней.</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация</h2>
+    <form class="inline-form" method="post" action="/user/meeting/register">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Вход</h2>
+    <form class="inline-form" method="post" action="/user/meeting/login">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <button type="submit">Войти</button>
+    </form>
+    {% if current_id %}<div class="meta" style="margin-top:8px">Вы вошли как: {{ current_id }} ({{ current_role }})</div>{% endif %}
+</section>
+
+{% if current_id %}
+<section class="table-wrapper">
+    <h2>Создать бронь</h2>
+    <form class="inline-form" method="post" action="/user/meeting/create-booking">
+        <select name="room_id">
+            {% for room in rooms %}
+            <option value="{{ room.id }}">{{ room.id }} - {{ room.name }}</option>
+            {% endfor %}
+        </select>
+        <input type="datetime-local" name="start_time" required>
+        <input type="datetime-local" name="end_time" required>
+        <input type="text" name="title" placeholder="Название" required>
+        <button type="submit">Забронировать</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Мои активные брони</h2>
+    <table>
+        <thead><tr><th>ID</th><th>Комната</th><th>Старт</th><th>Финиш</th><th>Тема</th><th>Действие</th></tr></thead>
+        <tbody>
+        {% for b in my_bookings %}
+            <tr>
+                <td>{{ b.id }}</td><td>{{ b.room_name }}</td><td>{{ b.start_time }}</td><td>{{ b.end_time }}</td><td>{{ b.title }}</td>
+                <td>
+                    <form class="inline-form" method="post" action="/user/meeting/cancel-booking">
+                        <input type="hidden" name="booking_id" value="{{ b.id }}">
+                        <button type="submit">Отменить</button>
+                    </form>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+{% if current_role in ["hr", "admin"] %}
+<section class="table-wrapper">
+    <h2>Все брони (HR/Admin)</h2>
+    <table>
+        <thead><tr><th>ID</th><th>User</th><th>ФИО</th><th>Комната</th><th>Старт</th><th>Финиш</th><th>Тема</th></tr></thead>
+        <tbody>
+        {% for b in all_bookings %}
+            <tr><td>{{ b.id }}</td><td>{{ b.user_id }}</td><td>{{ b.full_name }}</td><td>{{ b.room_name }}</td><td>{{ b.start_time }}</td><td>{{ b.end_time }}</td><td>{{ b.title }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

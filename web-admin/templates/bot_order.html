@@ -1,0 +1,133 @@
+{% extends "bot_base.html" %}
+{% block content %}
+<section class="page-header"><h1>Кассовые документы (ПКО/РКО)</h1></section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация</h2>
+    <form class="inline-form" method="post" action="/bot/order/register">
+        <input type="password" name="access_password" placeholder="Пароль доступа бота" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="password" name="account_password" placeholder="Пароль аккаунта" required>
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+</section>
+<section class="table-wrapper">
+    <h2>Вход</h2>
+    <form class="inline-form" method="post" action="/bot/order/login">
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <button type="submit">Войти</button>
+    </form>
+    {% if current_id %}<div class="meta" style="margin-top:8px">Роль: {{ current_role }}</div>{% endif %}
+</section>
+{% if current_id %}
+{% if can_approve %}
+<section class="table-wrapper">
+    <h2>Уведомления руководителя/финансового менеджера</h2>
+    <p>Заявок на согласование: <strong>{{ pending_requests_count }}</strong></p>
+    <p>Одобренных документов к печати: <strong>{{ approved_for_print|length }}</strong></p>
+</section>
+{% endif %}
+<section class="table-wrapper">
+    <h2>Новая заявка</h2>
+    <form class="inline-form" method="post" action="/bot/order/create">
+        <select name="doc_type"><option value="ПКО">ПКО</option><option value="РКО">РКО</option></select>
+        <input type="text" name="order_date" placeholder="Дата (ДД.ММ.ГГГГ)" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <select name="basis_type" required>
+            <option value="До внесение">До внесение</option>
+            <option value="Обеспечительный">Обеспечительный</option>
+            <option value="Оплата услуг">Оплата услуг</option>
+            <option value="Аванс">Аванс</option>
+            <option value="Предоплата">Предоплата</option>
+            <option value="Внесение аванса">Внесение аванса</option>
+            <option value="Рекомендация">Рекомендация</option>
+            <option value="Техвозврат">Техвозврат</option>
+            <option value="Возврат">Возврат</option>
+            <option value="Расходы">Расходы</option>
+            <option value="Аванс на приобретение">Аванс на приобретение</option>
+        </select>
+        <input type="text" name="contract_number" placeholder="№ договора" required>
+        <input type="text" name="contract_date" placeholder="Дата договора" required>
+        <input type="number" step="0.01" name="amount" placeholder="Сумма" required>
+        <button type="submit">Отправить</button>
+    </form>
+</section>
+<section class="table-wrapper">
+    <h2>Мои заявки</h2>
+    <table><thead><tr><th>ID</th><th>Тип</th><th>Номер</th><th>Дата</th><th>Сумма</th><th>Статус</th><th>Комментарий</th></tr></thead><tbody>
+    {% for r in requests %}
+    <tr>
+        <td>{{ r.id }}</td>
+        <td>{{ r.doc_type }}</td>
+        <td>{{ r.doc_number }}</td>
+        <td>{{ r.date }}</td>
+        <td>{{ r.amount }}</td>
+        <td>
+            {{ r.status }}
+            {% if r.status|string|trim|lower == 'одобрено' %}
+                <br><a href="/bot/order/document/{{ r.id }}">Скачать</a>
+                <br><a href="/bot/order/document/{{ r.id }}/yadisk" target="_blank" rel="noopener noreferrer">Я.Диск</a>
+            {% endif %}
+        </td>
+        <td>{{ r.comment }}</td>
+    </tr>
+    {% endfor %}
+    </tbody></table>
+</section>
+{% if can_approve %}
+<section class="table-wrapper">
+    <h2>Заявки на подтверждение руководителем</h2>
+    <table><thead><tr><th>ID</th><th>Email</th><th>ФИО</th><th>Тип</th><th>Номер</th><th>Сумма</th><th>Статус</th><th>Действие</th><th>Документ</th></tr></thead><tbody>
+    {% for r in pending_requests %}
+        <tr>
+            <td>{{ r.id }}</td>
+            <td>{{ r.email or '-' }}</td>
+            <td>{{ r.full_name }}</td>
+            <td>{{ r.doc_type }}</td>
+            <td>{{ r.doc_number }}</td>
+            <td>{{ r.amount }}</td>
+            <td>{{ r.status }}</td>
+            <td>
+                <form class="inline-form" method="post" action="/bot/order/update-status">
+                    <input type="hidden" name="order_id" value="{{ r.id }}">
+                    <select name="status" required>
+                        <option value="одобрено">одобрено</option>
+                        <option value="отклонено">отклонено</option>
+                        <option value="на рассмотрении">на рассмотрении</option>
+                    </select>
+                    <input type="text" name="comment" placeholder="Комментарий">
+                    <button type="submit">Применить</button>
+                </form>
+            </td>
+            <td>{% if r.status|string|trim|lower == 'одобрено' %}<a href="/bot/order/document/{{ r.id }}">Скачать</a> | <a href="/bot/order/document/{{ r.id }}/yadisk" target="_blank" rel="noopener noreferrer">Я.Диск</a>{% else %}-{% endif %}</td>
+        </tr>
+    {% endfor %}
+    </tbody></table>
+</section>
+<section class="table-wrapper">
+    <h2>Одобренные документы к печати</h2>
+    <table><thead><tr><th>ID</th><th>Тип</th><th>Номер</th><th>ФИО</th><th>Дата</th><th>Сумма</th><th>Документ</th></tr></thead><tbody>
+    {% for r in approved_for_print %}
+        <tr>
+            <td>{{ r.id }}</td>
+            <td>{{ r.doc_type }}</td>
+            <td>{{ r.doc_number }}</td>
+            <td>{{ r.full_name }}</td>
+            <td>{{ r.date }}</td>
+            <td>{{ r.amount }}</td>
+            <td><a href="/bot/order/document/{{ r.id }}">Скачать</a> | <a href="/bot/order/document/{{ r.id }}/yadisk" target="_blank" rel="noopener noreferrer">Я.Диск</a></td>
+        </tr>
+    {% endfor %}
+    {% if not approved_for_print %}
+        <tr><td colspan="7">Нет документов к печати</td></tr>
+    {% endif %}
+    </tbody></table>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

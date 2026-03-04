@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Единая веб-админка</h1>
+    <p>Все боты в одном интерфейсе: контроль, аналитика и быстрый переход по модулям.</p>
+</section>
+
+<section class="cards">
+    <div class="card">
+        <div class="label">Всего пользователей (агрегировано)</div>
+        <div class="value">{{ dashboard.totals.users }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Всего сущностей (агрегировано)</div>
+        <div class="value">{{ dashboard.totals.entities }}</div>
+    </div>
+</section>
+
+<section class="grid">
+    {% for module in dashboard.modules %}
+    <a class="module-card" href="/modules/{{ module.key }}">
+        <div class="title">{{ module.title }}</div>
+        {% if module.exists %}
+            <div class="status ok">Подключено</div>
+            <div class="stats">
+                {% for key, value in module.stats.items() %}
+                <span>{{ key }}: {{ value }}</span>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="status bad">БД не найдена</div>
+        {% endif %}
+    </a>
+    {% endfor %}
+</section>
+
+<section class="table-wrapper">
+    <h2>Пользователи из всех ботов</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Источник</th>
+                <th>Email</th>
+                <th>ФИО</th>
+                <th>Отдел</th>
+                <th>Роль</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for user in users %}
+            <tr>
+                <td>{{ user.source }}</td>
+                <td>{{ user.email or '-' }}</td>
+                <td>{{ user.full_name }}</td>
+                <td>{{ user.department }}</td>
+                <td>{{ user.role }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

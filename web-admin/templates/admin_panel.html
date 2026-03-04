@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Панель управления сотрудниками и согласованиями</h1>
+    <p>Здесь быстрые переходы к операциям подтверждения, согласования, удаления и изменения отделов.</p>
+</section>
+
+<section class="grid">
+    <a class="module-card" href="/modules/docflow">
+        <div class="title">Подтверждение сотрудников (ROP)</div>
+        <div class="stats"><span>Откройте блок "Doc Flow - подтверждение сотрудников"</span></div>
+    </a>
+    <a class="module-card" href="/modules/order">
+        <div class="title">Согласование ПКО/РКО</div>
+        <div class="stats"><span>Изменяйте статусы: на рассмотрении / одобрено / отклонено</span></div>
+    </a>
+    <a class="module-card" href="/modules/meeting">
+        <div class="title">Управление переговорами и ролями</div>
+        <div class="stats"><span>Роли, комнаты, бронирования</span></div>
+    </a>
+    <a class="module-card" href="/modules/contracts">
+        <div class="title">Реестр договоров</div>
+        <div class="stats"><span>Статусы договоров + переход в Google Sheets</span></div>
+    </a>
+</section>
+
+<section class="table-wrapper">
+    <h2>DocFlow: массовое подтверждение</h2>
+    <p>Подтверждает всех сотрудников со статусом ожидания в модуле DocFlow.</p>
+    <form method="post" action="/admin/docflow/approve-all" style="margin: 10px 0 20px;">
+        <button type="submit">Подтвердить всех ожидающих</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Google Sheets реестр договоров</h2>
+    {% if message %}
+    <p class="success">{{ message }}</p>
+    {% endif %}
+    {% if error_message %}
+    <p class="error">{{ error_message }}</p>
+    {% endif %}
+    <p>
+        <a href="{{ contracts_sheet_url }}" target="_blank" rel="noopener noreferrer">
+            Открыть таблицу реестра договоров
+        </a>
+    </p>
+    <form method="post" action="/admin/contracts/import-sheet" style="margin: 10px 0 20px;">
+        <button type="submit">Импортировать реестр из Google Sheets</button>
+    </form>
+    <h3>Импорт из вставленного текста</h3>
+    <form method="post" action="/admin/contracts/import-text">
+        <textarea
+            name="contracts_tsv"
+            rows="14"
+            placeholder="Вставьте таблицу с колонками: Номер, ФИО, Отдел, Дата заключения, Форма, Адрес, Статус"
+            required
+            style="width:100%; padding:10px; border-radius:10px; border:1px solid #374151; background:#0f172a; color:#e2e8f0;"
+        ></textarea>
+        <div style="margin-top:10px;">
+            <button type="submit">Импортировать из текста</button>
+        </div>
+    </form>
+</section>
+{% endblock %}

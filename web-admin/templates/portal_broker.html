@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Бронирование брокеров</h1>
+    <p>Роли, брони, отмена и просмотр всех броней.</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация пользователя</h2>
+    <form class="inline-form" method="post" action="/portal/broker/register">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <button type="submit">Зарегистрировать</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Создать бронирование</h2>
+    <form class="inline-form" method="post" action="/portal/broker/create-booking">
+        <input type="number" name="user_id" placeholder="ID пользователя" required>
+        <select name="room_id">
+            {% for room in rooms %}
+            <option value="{{ room.id }}">{{ room.id }} - {{ room.name }}</option>
+            {% endfor %}
+        </select>
+        <input type="datetime-local" name="start_time" required>
+        <input type="datetime-local" name="end_time" required>
+        <input type="text" name="title" placeholder="Название брони" required>
+        <button type="submit">Создать</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Управление ролями</h2>
+    <form class="inline-form" method="post" action="/portal/broker/update-role">
+        <input type="number" name="telegram_id" placeholder="Telegram ID" required>
+        <select name="role">
+            <option value="user">user</option>
+            <option value="hr">hr</option>
+            <option value="head">head</option>
+            <option value="admin">admin</option>
+        </select>
+        <button type="submit">Обновить роль</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
+    <h2>Все бронирования</h2>
+    <table>
+        <thead><tr><th>ID</th><th>User ID</th><th>ФИО</th><th>Ресурс</th><th>Старт</th><th>Финиш</th><th>Тема</th></tr></thead>
+        <tbody>
+            {% for b in all_bookings %}
+            <tr><td>{{ b.id }}</td><td>{{ b.user_id }}</td><td>{{ b.full_name }}</td><td>{{ b.room_name }}</td><td>{{ b.start_time }}</td><td>{{ b.end_time }}</td><td>{{ b.title }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="table-wrapper">
+    <h2>Отмена брони</h2>
+    <form class="inline-form" method="post" action="/portal/broker/cancel-booking">
+        <input type="number" name="booking_id" placeholder="ID брони" required>
+        <input type="number" name="actor_user_id" placeholder="Кто отменяет (ID)" required>
+        <select name="actor_role">
+            <option value="user">user</option>
+            <option value="hr">hr</option>
+            <option value="head">head</option>
+            <option value="admin">admin</option>
+        </select>
+        <button type="submit">Отменить</button>
+    </form>
+</section>
+{% endblock %}

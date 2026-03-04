@@ -1,0 +1,83 @@
+{% extends "bot_base.html" %}
+{% block content %}
+<section class="page-header"><h1>Реестр договоров</h1></section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Регистрация</h2>
+    <form class="inline-form" method="post" action="/bot/contracts/register">
+        <input type="text" name="full_name" placeholder="ФИО" required>
+        <input type="text" name="department" placeholder="Отдел" required>
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="password" name="account_password" placeholder="Пароль аккаунта" required>
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+</section>
+<section class="table-wrapper">
+    <h2>Вход</h2>
+    <form class="inline-form" method="post" action="/bot/contracts/login">
+        <input type="email" name="email" placeholder="Email" required>
+        <input type="password" name="password" placeholder="Пароль" required>
+        <button type="submit">Войти</button>
+    </form>
+</section>
+<section class="table-wrapper">
+    <h2>Google Sheets реестр договоров</h2>
+    <p><a href="{{ contracts_sheet_url }}" target="_blank" rel="noopener noreferrer">Открыть общий реестр договоров</a></p>
+</section>
+<section class="table-wrapper">
+    <h2>Шаблоны договоров</h2>
+    <table><thead><tr><th>Файл</th><th></th></tr></thead><tbody>
+    {% for t in templates_list %}<tr><td>{{ t.name }}</td><td><a href="/portal/contracts/template?path={{ t.path }}">Скачать</a></td></tr>{% endfor %}
+    </tbody></table>
+</section>
+{% if current_id %}
+<section class="table-wrapper">
+    <h2>Создать договор</h2>
+    <form class="inline-form" method="post" action="/bot/contracts/create">
+        <select name="form" required>
+            <option value="ПР">ПР</option>
+            <option value="ЮУ">ЮУ</option>
+            <option value="ПК">ПК</option>
+            <option value="Альт">Альт</option>
+            <option value="Л(ПР)">Л(ПР)</option>
+            <option value="Арен (ПК)">Арен (ПК)</option>
+            <option value="Ипотека">Ипотека</option>
+            <option value="ПР(Н)">ПР(Н)</option>
+            <option value="ПК(Н)">ПК(Н)</option>
+            <option value="ЮУ(Н)">ЮУ(Н)</option>
+            <option value="ПР(З)">ПР(З)</option>
+            <option value="ПРЕД(СВ)">ПРЕД(СВ)</option>
+        </select>
+        <input type="text" name="address" placeholder="Адрес" required>
+        <button type="submit">Создать</button>
+    </form>
+</section>
+<section class="table-wrapper">
+    <h2>Мои договоры</h2>
+    <table><thead><tr><th>ID</th><th>Номер</th><th>Дата</th><th>Форма</th><th>Адрес</th><th>Статус</th><th>Действие</th></tr></thead><tbody>
+    {% for c in mine %}
+    <tr>
+        <td>{{ c.id }}</td>
+        <td>{{ c.number }}</td>
+        <td>{{ c.date }}</td>
+        <td>{{ c.form }}</td>
+        <td>{{ c.address }}</td>
+        <td>{{ c.status }}</td>
+        <td>
+            {% if c.status|string|trim|lower != 'подписан' %}
+            <form class="inline-form" method="post" action="/bot/contracts/mark-signed">
+                <input type="hidden" name="contract_id" value="{{ c.id }}">
+                <button type="submit">Подписан</button>
+            </form>
+            {% else %}
+            -
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody></table>
+</section>
+{% endif %}
+{% endblock %}
