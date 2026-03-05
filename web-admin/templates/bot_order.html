@@ -104,7 +104,7 @@
                     <button type="submit">Применить</button>
                 </form>
             </td>
-            <td>{% if r.status|string|trim|lower == 'одобрено' %}<a href="/bot/order/document/{{ r.id }}">Скачать</a> | <a href="/bot/order/document/{{ r.id }}/yadisk" target="_blank" rel="noopener noreferrer">Я.Диск</a>{% else %}-{% endif %}</td>
+            <td><a href="/bot/order/document/{{ r.id }}">Скачать</a> | <a href="/bot/order/document/{{ r.id }}/yadisk" target="_blank" rel="noopener noreferrer">Я.Диск</a></td>
         </tr>
     {% endfor %}
     </tbody></table>

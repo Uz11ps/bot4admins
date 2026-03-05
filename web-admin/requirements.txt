@@ -5,3 +5,5 @@ python-dotenv
 python-multipart
 itsdangerous
 openpyxl
+python-docx
+num2words

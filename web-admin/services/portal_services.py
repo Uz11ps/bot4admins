@@ -14,6 +14,7 @@ from urllib import error as urlerror
 from urllib.parse import urlencode, quote
 
 from openpyxl import load_workbook
+from num2words import num2words
 
 
 BASE = Path("/root/webadminbots/Infinity Projects")
@@ -697,6 +698,12 @@ def _format_amount_ru(value: Any) -> str:
     return f"{rub:,}".replace(",", " ") + f",{kop:02d}"
 
 
+def _amount_words_ru(value: Any) -> str:
+    rub, kop = _amount_parts(value)
+    text = num2words(rub, lang="ru")
+    return f"{text} рублей {kop:02d} копеек".capitalize()
+
+
 def _order_template_path(doc_type: str) -> Path:
     if str(doc_type).strip().upper() == "ПКО":
         return ORDER_DOC_TEMPLATES_DIR / "pko_template.xlsx"
@@ -736,6 +743,7 @@ def _fill_pko_template(path: Path, row: dict[str, Any]) -> None:
     dt = _parse_order_date(row.get("date"))
     rub, kop = _amount_parts(row.get("amount"))
     amount_text = _format_amount_ru(row.get("amount"))
+    amount_words = _amount_words_ru(row.get("amount"))
     contract_number = str(row.get("contract_number") or "").strip()
     contract_date = str(row.get("contract_date") or "").strip()
     basis_type = str(row.get("basis_type") or "").strip()
@@ -750,11 +758,17 @@ def _fill_pko_template(path: Path, row: dict[str, Any]) -> None:
     full_name = str(row.get("full_name") or "")
     ws["G15"] = full_name
     ws["K16"] = full_name
+    ws["K21"] = full_name
+    ws["CF14"] = full_name
     ws["AO19"] = amount_text
     ws["CC19"] = rub
     ws["CY19"] = kop
     ws["K23"] = basis_type
     ws["A24"] = contract_line
+    ws["BW15"] = (basis_type + (f" по договору № {contract_number}" if contract_number else "")).strip()
+    ws["BW16"] = contract_date
+    ws["K28"] = amount_words
+    ws["CG25"] = amount_words
     wb.save(path)
 
 
@@ -762,9 +776,6 @@ def order_generate_document(order_id: int) -> tuple[bool, str, Path | None]:
     row = order_get_request(order_id)
     if not row:
         return False, "Заявка не найдена", None
-    status = str(row.get("status", "")).strip().lower()
-    if status != "одобрено":
-        return False, "Документ доступен только для заявок со статусом 'одобрено'", None
 
     path = order_document_path(order_id)
     template_path = _order_template_path(str(row.get("doc_type") or ""))
@@ -1157,6 +1168,25 @@ def docflow_approve_user(telegram_id: str, approve: bool) -> tuple[bool, str]:
 def docflow_create_application(
     agent_telegram_id: str, deal_type: str, contract_no: str, address: str, object_type: str, head_name: str
 ) -> tuple[bool, str]:
+    ok, text, _ = docflow_create_application_full(
+        agent_telegram_id=agent_telegram_id,
+        deal_type=deal_type,
+        contract_no=contract_no,
+        address=address,
+        object_type=object_type,
+        head_name=head_name,
+    )
+    return ok, text
+
+
+def docflow_create_application_full(
+    agent_telegram_id: str,
+    deal_type: str,
+    contract_no: str,
+    address: str,
+    object_type: str,
+    head_name: str,
+) -> tuple[bool, str, int | None]:
     db = db_paths()["docflow"]
     user_cols = _table_columns(db, "users")
     user_select = "full_name"
@@ -1164,11 +1194,11 @@ def docflow_create_application(
         user_select = "id, full_name"
     user = _query(db, f"SELECT {user_select} FROM users WHERE telegram_id = ? LIMIT 1", (agent_telegram_id,))
     if not user:
-        return False, "Сотрудник не найден"
+        return False, "Сотрудник не найден", None
     agent_id = user[0]["id"] if "id" in user[0].keys() else None
     agent_name = str(user[0]["full_name"] or "").strip()
     if not agent_name:
-        return False, "Не заполнено ФИО сотрудника в базе"
+        return False, "Не заполнено ФИО сотрудника в базе", None
 
     cols = _table_columns(db, "applications")
     values: dict[str, Any] = {
@@ -1186,13 +1216,142 @@ def docflow_create_application(
         values["agent_id"] = agent_id
     fields = [f for f in values.keys() if f in cols]
     if not fields:
-        return False, "Таблица applications не содержит ожидаемых полей"
+        return False, "Таблица applications не содержит ожидаемых полей", None
     sql = f"INSERT INTO applications ({', '.join(fields)}) VALUES ({', '.join(['?'] * len(fields))})"
     try:
-        _execute(db, sql, tuple(values[f] for f in fields))
+        with sqlite3.connect(db) as conn:
+            cur = conn.execute(sql, tuple(values[f] for f in fields))
+            conn.commit()
+            app_id = int(cur.lastrowid or 0)
+            if app_id <= 0:
+                last = conn.execute("SELECT id FROM applications ORDER BY id DESC LIMIT 1").fetchone()
+                app_id = int(last[0]) if last else 0
+        return True, "Заявка создана", app_id if app_id > 0 else None
     except sqlite3.Error as exc:
-        return False, f"Ошибка создания заявки: {exc}"
-    return True, "Заявка создана"
+        return False, f"Ошибка создания заявки: {exc}", None
+
+
+def _docflow_details_db_table() -> None:
+    db = db_paths()["docflow"]
+    _ensure_db_file(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS web_application_details (
+                app_id INTEGER PRIMARY KEY,
+                answers_json TEXT NOT NULL,
+                document_path TEXT NOT NULL,
+                uploads_json TEXT NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.commit()
+
+
+def docflow_document_path(app_id: int) -> Path:
+    docs_dir = BASE / "doc-flow-bot" / "app" / "web_documents"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    return docs_dir / f"application_{app_id}.docx"
+
+
+def docflow_uploads_dir(app_id: int) -> Path:
+    uploads_dir = BASE / "doc-flow-bot" / "app" / "web_uploads" / f"application_{app_id}"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    return uploads_dir
+
+
+def docflow_generate_application_document(
+    app_id: int,
+    app_row: dict[str, Any],
+    answers: dict[str, str],
+    uploaded_files: list[str],
+) -> Path:
+    from docx import Document
+
+    path = docflow_document_path(app_id)
+    doc = Document()
+    doc.add_heading(f"Заявка #{app_id}: Протокол + документы", 0)
+    doc.add_paragraph(f"Тип сделки: {app_row.get('deal_type', '')}")
+    doc.add_paragraph(f"№ договора: {app_row.get('contract_no', '')}")
+    doc.add_paragraph(f"Адрес: {app_row.get('address', '')}")
+    doc.add_paragraph(f"Тип объекта: {app_row.get('object_type', '')}")
+    doc.add_paragraph(f"Руководитель: {app_row.get('head_name', '')}")
+    doc.add_paragraph(f"Агент: {app_row.get('agent_name', '')}")
+    doc.add_paragraph("")
+    doc.add_heading("Ответы по анкете", level=1)
+    for i in range(1, 16):
+        key = f"q{i}"
+        question = f"Вопрос {i}"
+        answer = str(answers.get(key, "")).strip()
+        doc.add_paragraph(f"{question}: {answer}")
+    doc.add_paragraph("")
+    doc.add_heading("Загруженные документы", level=1)
+    if uploaded_files:
+        for file_name in uploaded_files:
+            doc.add_paragraph(file_name)
+    else:
+        doc.add_paragraph("Файлы не загружены")
+    doc.save(path)
+    return path
+
+
+def docflow_save_application_details(
+    app_id: int, answers: dict[str, str], document_path: Path, uploads: list[str]
+) -> tuple[bool, str]:
+    _docflow_details_db_table()
+    db = db_paths()["docflow"]
+    try:
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                """
+                INSERT INTO web_application_details (app_id, answers_json, document_path, uploads_json, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(app_id) DO UPDATE SET
+                    answers_json = excluded.answers_json,
+                    document_path = excluded.document_path,
+                    uploads_json = excluded.uploads_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (app_id, json.dumps(answers, ensure_ascii=False), str(document_path), json.dumps(uploads, ensure_ascii=False)),
+            )
+            conn.commit()
+        return True, "OK"
+    except sqlite3.Error as exc:
+        return False, str(exc)
+
+
+def docflow_get_application_details(app_id: int) -> dict[str, Any] | None:
+    _docflow_details_db_table()
+    db = db_paths()["docflow"]
+    rows = _query(
+        db,
+        "SELECT app_id, answers_json, document_path, uploads_json, created_at, updated_at FROM web_application_details WHERE app_id = ? LIMIT 1",
+        (app_id,),
+    )
+    if not rows:
+        return None
+    row = dict(rows[0])
+    return {
+        "app_id": row.get("app_id"),
+        "answers": json.loads(str(row.get("answers_json") or "{}")),
+        "document_path": str(row.get("document_path") or ""),
+        "uploads": json.loads(str(row.get("uploads_json") or "[]")),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def docflow_applications_with_document_link(all_rows: bool = False, agent_telegram_id: str = "") -> list[dict[str, Any]]:
+    apps = docflow_applications() if all_rows else docflow_applications_by_user(agent_telegram_id)
+    result: list[dict[str, Any]] = []
+    for app in apps:
+        row = dict(app)
+        details = docflow_get_application_details(int(row.get("id") or 0))
+        row["has_document"] = bool(details and str(details.get("document_path") or "").strip())
+        result.append(row)
+    return result
 
 
 def docflow_applications() -> list[dict[str, Any]]:

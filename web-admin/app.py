@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -42,12 +42,18 @@ from services.portal_services import (
     contracts_templates,
     contracts_update_status,
     docflow_applications_by_user,
+    docflow_applications_with_document_link,
+    docflow_create_application_full,
+    docflow_generate_application_document,
+    docflow_get_application_details,
     docflow_get_user,
     docflow_applications,
     docflow_approve_user,
     docflow_create_application,
     docflow_pending_users,
     docflow_register_user,
+    docflow_save_application_details,
+    docflow_uploads_dir,
     docflow_update_status,
     meeting_get_user,
     meeting_bookings,
@@ -688,7 +694,8 @@ async def bot_docflow_page(request: Request) -> Any:
             "current_id": current_id,
             "current_role": current_role,
             "can_approve": can_approve,
-            "applications": docflow_applications_by_user(str(current_id)) if current_id else [],
+            "applications": docflow_applications_with_document_link(agent_telegram_id=str(current_id)) if current_id else [],
+            "review_applications": docflow_applications_with_document_link(all_rows=True) if can_approve else [],
             "pending_users": docflow_pending_users() if can_approve else [],
             "message": request.query_params.get("message", ""),
             "error_message": request.query_params.get("error_message", ""),
@@ -733,15 +740,95 @@ async def bot_docflow_create(
     address: str = Form(""),
     object_type: str = Form(""),
     head_name: str = Form(""),
+    q1: str = Form(""),
+    q2: str = Form(""),
+    q3: str = Form(""),
+    q4: str = Form(""),
+    q5: str = Form(""),
+    q6: str = Form(""),
+    q7: str = Form(""),
+    q8: str = Form(""),
+    q9: str = Form(""),
+    q10: str = Form(""),
+    q11: str = Form(""),
+    q12: str = Form(""),
+    q13: str = Form(""),
+    q14: str = Form(""),
+    q15: str = Form(""),
+    attachments: list[UploadFile] = File(default=[]),
 ) -> RedirectResponse:
     agent_id = request.session.get("docflow_user_id")
     if not agent_id:
         return _bot_redirect("docflow", False, "Сначала выполните вход")
+    answers = {
+        "q1": q1,
+        "q2": q2,
+        "q3": q3,
+        "q4": q4,
+        "q5": q5,
+        "q6": q6,
+        "q7": q7,
+        "q8": q8,
+        "q9": q9,
+        "q10": q10,
+        "q11": q11,
+        "q12": q12,
+        "q13": q13,
+        "q14": q14,
+        "q15": q15,
+    }
     try:
-        ok, text = docflow_create_application(str(agent_id), deal_type, contract_no, address, object_type, head_name)
+        ok, text, app_id = docflow_create_application_full(
+            str(agent_id), deal_type, contract_no, address, object_type, head_name
+        )
+        if not ok or app_id is None:
+            return _bot_redirect("docflow", False, text)
+        all_apps = docflow_applications()
+        app_row = next((a for a in all_apps if int(a.get("id") or 0) == int(app_id)), {"id": app_id, "agent_name": ""})
+        uploads_dir = docflow_uploads_dir(app_id)
+        uploaded_names: list[str] = []
+        for file in attachments:
+            if file.filename is None or file.filename.strip() == "":
+                continue
+            safe_name = file.filename.replace("/", "_").replace("\\", "_")
+            target = uploads_dir / safe_name
+            content = await file.read()
+            target.write_bytes(content)
+            uploaded_names.append(safe_name)
+        doc_path = docflow_generate_application_document(app_id, app_row, answers, uploaded_names)
+        ok_save, save_text = docflow_save_application_details(app_id, answers, doc_path, uploaded_names)
+        if not ok_save:
+            return _bot_redirect("docflow", False, f"Заявка создана, но данные анкеты не сохранены: {save_text}")
+        return _bot_redirect("docflow", True, "Заявка создана. Анкета и документ сохранены")
     except Exception as exc:
-        ok, text = False, f"Ошибка создания заявки: {exc}"
-    return _bot_redirect("docflow", ok, text)
+        return _bot_redirect("docflow", False, f"Ошибка создания заявки: {exc}")
+
+
+@app.get("/bot/docflow/document/{app_id}")
+async def bot_docflow_download_document(request: Request, app_id: int) -> Any:
+    agent_id = request.session.get("docflow_user_id")
+    role = request.session.get("docflow_user_role", "agent")
+    if not agent_id:
+        return _bot_redirect("docflow", False, "Сначала выполните вход")
+    details = docflow_get_application_details(app_id)
+    if not details:
+        return _bot_redirect("docflow", False, "Документ по заявке не найден")
+    row = next((r for r in docflow_applications() if int(r.get("id") or 0) == app_id), None)
+    if row is None:
+        return _bot_redirect("docflow", False, "Заявка не найдена")
+    if role not in {"rop", "admin"}:
+        user_apps = {int(r.get("id") or 0) for r in docflow_applications_by_user(str(agent_id))}
+        if app_id not in user_apps:
+            return _bot_redirect("docflow", False, "Недостаточно прав для просмотра документа")
+    path = Path(str(details.get("document_path") or ""))
+    if not path.exists():
+        return _bot_redirect("docflow", False, "Файл документа не найден")
+    filename = f"docflow_application_{app_id}.docx"
+    return FileResponse(
+        path=path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
 @app.post("/bot/docflow/approve-user")
