@@ -379,6 +379,104 @@ th {
     font-weight: 700;
 }
 
+.docflow-create-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.docflow-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 10px;
+}
+
+.docflow-meta-grid input {
+    height: 40px;
+}
+
+.docflow-side-layout {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 12px;
+    align-items: start;
+}
+
+.docflow-question-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(260px, 1fr));
+    gap: 10px;
+}
+
+.docflow-question-row {
+    border: 1px solid #2f4e9b;
+    border-radius: 10px;
+    padding: 10px;
+    background: #0d1a3e;
+}
+
+.docflow-question-row label {
+    display: block;
+    color: #dce7ff;
+    font-size: 13px;
+    margin-bottom: 6px;
+}
+
+.docflow-question-row input,
+.docflow-question-row select {
+    width: 100%;
+    min-width: 0;
+}
+
+.docflow-upload-panel {
+    border: 1px solid #2f4e9b;
+    border-radius: 10px;
+    padding: 10px;
+    background: #0d1a3e;
+}
+
+.docflow-upload-panel h3 {
+    margin: 0 0 8px;
+    font-size: 15px;
+}
+
+.docflow-upload-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.docflow-upload-list label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: #dce7ff;
+    font-size: 13px;
+}
+
+.docflow-create-form > button {
+    width: fit-content;
+    height: 40px;
+    padding: 0 16px;
+    border-radius: 10px;
+    background: linear-gradient(180deg, #4e78ff 0%, #3760e5 100%);
+    border: 0;
+    color: #fff;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+@media (max-width: 1100px) {
+    .docflow-side-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .docflow-question-list {
+        grid-template-columns: 1fr;
+    }
+}
+
 .bot-content table {
     width: 100%;
     border-collapse: collapse;

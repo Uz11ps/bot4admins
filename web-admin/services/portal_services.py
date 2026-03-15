@@ -5,6 +5,9 @@ import hashlib
 import shutil
 import json
 import os
+import time
+import tempfile
+import zipfile
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -118,6 +121,46 @@ def web_authenticate(module: str, email: str, password: str) -> tuple[bool, str,
     if row["password_hash"] != _password_hash(password):
         return False, "Неверный пароль", None
     return True, "Вход выполнен", str(row["telegram_id"])
+
+
+def web_reset_password(module: str, email: str, new_password: str) -> tuple[bool, str]:
+    path = db_paths().get(module)
+    if path is None:
+        return False, "Неизвестный модуль"
+    _ensure_web_users_table(path)
+    clean_email = email.strip().lower()
+    clean_password = new_password.strip()
+    if "@" not in clean_email:
+        return False, "Некорректная почта"
+    if len(clean_password) < 4:
+        return False, "Пароль должен быть не короче 4 символов"
+    exists = _query(path, "SELECT id FROM web_users WHERE email = ? LIMIT 1", (clean_email,))
+    if not exists:
+        return False, "Пользователь с такой почтой не найден"
+    _execute(path, "UPDATE web_users SET password_hash = ? WHERE email = ?", (_password_hash(clean_password), clean_email))
+    return True, "Пароль обновлен. Войдите с новым паролем"
+
+
+def web_delete_user(module: str, email: str) -> tuple[bool, str]:
+    path = db_paths().get(module)
+    if path is None:
+        return False, "Неизвестный модуль"
+    _ensure_web_users_table(path)
+    clean_email = email.strip().lower()
+    if "@" not in clean_email:
+        return False, "Некорректная почта"
+    rows = _query(path, "SELECT telegram_id FROM web_users WHERE email = ? LIMIT 1", (clean_email,))
+    if not rows:
+        return False, "Пользователь с такой почтой не найден"
+    telegram_id = str(rows[0]["telegram_id"])
+    info = _module_user_table(module)
+    if info is not None:
+        db, table, field = info
+        cols = _table_columns(db, table)
+        if field in cols:
+            _execute(db, f"DELETE FROM {table} WHERE {field} = ?", (telegram_id,))
+    affected = _execute(path, "DELETE FROM web_users WHERE email = ?", (clean_email,))
+    return (affected > 0, "Пользователь удален" if affected > 0 else "Пользователь не найден")
 
 
 def _module_user_table(module: str) -> tuple[Path, str, str] | None:
@@ -377,6 +420,49 @@ def _ensure_broker_schema() -> None:
         conn.commit()
 
 
+def _ensure_docflow_schema() -> None:
+    db = db_paths()["docflow"]
+    _ensure_db_file(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                telegram_id TEXT UNIQUE,
+                full_name TEXT NOT NULL DEFAULT '',
+                department_no TEXT NOT NULL DEFAULT '',
+                role TEXT NOT NULL DEFAULT 'agent',
+                is_active INTEGER NOT NULL DEFAULT 0,
+                is_approved INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id INTEGER,
+                department_no TEXT NOT NULL DEFAULT '',
+                deal_type TEXT NOT NULL DEFAULT '',
+                contract_no TEXT NOT NULL DEFAULT '',
+                address TEXT NOT NULL DEFAULT '',
+                object_type TEXT NOT NULL DEFAULT '',
+                head_name TEXT NOT NULL DEFAULT '',
+                agent_name TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'CREATED',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        try:
+            conn.execute("ALTER TABLE applications ADD COLUMN department_no TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        conn.commit()
+
+
 def broker_register_user(telegram_id: int, full_name: str, department: str) -> tuple[bool, str]:
     _ensure_broker_schema()
     role = "user"
@@ -622,10 +708,20 @@ def order_create_request(
 
 def order_requests(user_id: int | None = None) -> list[dict[str, Any]]:
     db = db_paths()["order"]
-    sql = """
-    SELECT id, doc_type, doc_number, user_id, date, full_name, amount, status, COALESCE(comment, '') AS comment, created_at
-    FROM orders
-    """
+    has_users = bool(_table_columns(db, "users"))
+    if has_users:
+        sql = """
+        SELECT o.id, o.doc_type, o.doc_number, o.user_id, o.date, o.full_name, o.amount, o.status,
+               COALESCE(o.comment, '') AS comment, o.created_at, COALESCE(u.department, '') AS department
+        FROM orders o
+        LEFT JOIN users u ON u.telegram_id = o.user_id
+        """
+    else:
+        sql = """
+        SELECT id, doc_type, doc_number, user_id, date, full_name, amount, status,
+               COALESCE(comment, '') AS comment, created_at, '' AS department
+        FROM orders
+        """
     params: tuple[Any, ...] = ()
     if user_id is not None:
         sql += " WHERE user_id = ?"
@@ -639,9 +735,11 @@ def order_get_request(order_id: int) -> dict[str, Any] | None:
     rows = _query(
         db,
         """
-        SELECT id, doc_type, doc_number, user_id, date, full_name, basis_type, contract_number, contract_date, amount,
-               status, COALESCE(comment, '') AS comment, created_at
-        FROM orders
+        SELECT o.id, o.doc_type, o.doc_number, o.user_id, o.date, o.full_name, o.basis_type, o.contract_number,
+               o.contract_date, o.amount, o.status, COALESCE(o.comment, '') AS comment, o.created_at,
+               COALESCE(u.department, '') AS department
+        FROM orders o
+        LEFT JOIN users u ON u.telegram_id = o.user_id
         WHERE id = ?
         LIMIT 1
         """,
@@ -737,6 +835,20 @@ def _fill_rko_template(path: Path, row: dict[str, Any]) -> None:
     wb.save(path)
 
 
+def _replace_sheet_values(ws: Any, replacements: dict[str, str]) -> None:
+    for row_cells in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+        for cell in row_cells:
+            value = cell.value
+            if not isinstance(value, str):
+                continue
+            updated = value
+            for old, new in replacements.items():
+                if old in updated:
+                    updated = updated.replace(old, new)
+            if updated != value:
+                cell.value = updated
+
+
 def _fill_pko_template(path: Path, row: dict[str, Any]) -> None:
     wb = load_workbook(path)
     ws = wb[wb.sheetnames[0]]
@@ -747,7 +859,8 @@ def _fill_pko_template(path: Path, row: dict[str, Any]) -> None:
     contract_number = str(row.get("contract_number") or "").strip()
     contract_date = str(row.get("contract_date") or "").strip()
     basis_type = str(row.get("basis_type") or "").strip()
-    contract_line = f"{contract_number} от {contract_date}".strip()
+    basis_line_full = basis_type.strip()
+    contract_line = (f"{contract_number} от {contract_date}").strip()
 
     ws["CX9"] = int(row.get("doc_number") or 0)
     ws["AQ13"] = int(row.get("doc_number") or 0)
@@ -760,15 +873,38 @@ def _fill_pko_template(path: Path, row: dict[str, Any]) -> None:
     ws["K16"] = full_name
     ws["K21"] = full_name
     ws["CF14"] = full_name
+    for cell_addr, value in {
+        "BW14": full_name,
+        "BW15": full_name,
+        "CC23": amount_text,
+        "CC24": amount_words,
+        "BW16": basis_line_full,
+        "BW17": contract_line,
+    }.items():
+        try:
+            ws[cell_addr] = value
+        except Exception:
+            pass
     ws["AO19"] = amount_text
     ws["CC19"] = rub
     ws["CY19"] = kop
-    ws["K23"] = basis_type
+    ws["K23"] = basis_line_full or basis_type
     ws["A24"] = contract_line
-    ws["BW15"] = (basis_type + (f" по договору № {contract_number}" if contract_number else "")).strip()
-    ws["BW16"] = contract_date
     ws["K28"] = amount_words
     ws["CG25"] = amount_words
+    _replace_sheet_values(
+        ws,
+        {
+            "Надеев Анатолий Алексеевич": full_name,
+            "Корчагина Дарья Игоревна": full_name,
+            "6061/1": contract_number or "—",
+            "02.03.2026": contract_date or dt.strftime("%d.%m.%Y"),
+            "Предоплата по договору № 6061/1": basis_line_full or basis_type,
+            "Предоплата по договору №6061/1": basis_line_full or basis_type,
+            "Двести семьдесят семь тысяч пятьсот": amount_words,
+            "50000": str(rub),
+        },
+    )
     wb.save(path)
 
 
@@ -797,6 +933,17 @@ def _yandex_headers() -> dict[str, str]:
     return {"Authorization": f"OAuth {token}"}
 
 
+def _safe_disk_name(value: str, fallback: str = "unknown") -> str:
+    text = " ".join(str(value or "").strip().split())
+    if not text:
+        text = fallback
+    bad = '\\/:*?"<>|'
+    for ch in bad:
+        text = text.replace(ch, " ")
+    text = "_".join([p for p in text.split(" ") if p])
+    return text[:120] if text else fallback
+
+
 def _yandex_api_json(method: str, endpoint: str, params: dict[str, Any] | None = None) -> tuple[bool, dict[str, Any] | None, str]:
     headers = _yandex_headers()
     if not headers:
@@ -817,12 +964,29 @@ def _yandex_api_json(method: str, endpoint: str, params: dict[str, Any] | None =
         return False, None, str(exc)
 
 
+def _yandex_api_json_retry(
+    method: str, endpoint: str, params: dict[str, Any] | None = None, retries: int = 6
+) -> tuple[bool, dict[str, Any] | None, str]:
+    last_ok = False
+    last_data: dict[str, Any] | None = None
+    last_text = "Неизвестная ошибка"
+    for attempt in range(retries):
+        ok, data, text = _yandex_api_json(method, endpoint, params)
+        last_ok, last_data, last_text = ok, data, text
+        if ok:
+            return ok, data, text
+        if "HTTP 423" not in text and "DiskResourceLockedError" not in text and "HTTP 500" not in text:
+            return ok, data, text
+        time.sleep(0.6 + attempt * 0.4)
+    return last_ok, last_data, last_text
+
+
 def _yandex_mkdirs(remote_dir: str) -> tuple[bool, str]:
     parts = [p for p in str(remote_dir).split("/") if p]
     curr = ""
     for part in parts:
         curr += "/" + part
-        ok, _, text = _yandex_api_json("PUT", "/resources", {"path": f"disk:{curr}"})
+        ok, _, text = _yandex_api_json_retry("PUT", "/resources", {"path": f"disk:{curr}"})
         if not ok and "HTTP 409" not in text:
             return False, text
     return True, "OK"
@@ -837,7 +1001,7 @@ def upload_file_to_yandex_disk(local_path: Path, remote_path: str) -> tuple[bool
     if not ok_dir:
         return False, text_dir, None
 
-    ok_up, data_up, text_up = _yandex_api_json(
+    ok_up, data_up, text_up = _yandex_api_json_retry(
         "GET",
         "/resources/upload",
         {"path": f"disk:{remote_clean}", "overwrite": "true"},
@@ -860,13 +1024,13 @@ def upload_file_to_yandex_disk(local_path: Path, remote_path: str) -> tuple[bool
         return False, f"Ошибка загрузки файла: {exc}", None
 
     private_url = f"https://disk.yandex.ru/client/disk{quote(remote_clean)}"
-    ok_pub, _, text_pub = _yandex_api_json("PUT", "/resources/publish", {"path": f"disk:{remote_clean}"})
+    ok_pub, _, text_pub = _yandex_api_json_retry("PUT", "/resources/publish", {"path": f"disk:{remote_clean}"})
     if not ok_pub and "HTTP 409" not in text_pub:
         if "HTTP 403" in text_pub:
             return True, "Файл загружен в Яндекс.Диск (без публичной ссылки)", private_url
         return False, f"Файл загружен, но не опубликован: {text_pub}", None
 
-    ok_meta, data_meta, text_meta = _yandex_api_json(
+    ok_meta, data_meta, text_meta = _yandex_api_json_retry(
         "GET",
         "/resources",
         {"path": f"disk:{remote_clean}", "fields": "public_url"},
@@ -887,27 +1051,170 @@ def order_upload_document_to_yandex(order_id: int, row: dict[str, Any], local_pa
     return upload_file_to_yandex_disk(local_path, remote_path)
 
 
-def order_pending_requests() -> list[dict[str, Any]]:
+def docflow_get_application(app_id: int) -> dict[str, Any] | None:
+    _ensure_docflow_schema()
+    rows = _query(
+        db_paths()["docflow"],
+        """
+        SELECT id, deal_type, contract_no, address, object_type, head_name, agent_name, department_no, status, created_at
+        FROM applications
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (app_id,),
+    )
+    return dict(rows[0]) if rows else None
+
+
+def docflow_upload_bundle_to_yandex(app_id: int) -> tuple[bool, str, str | None]:
+    details = docflow_get_application_details(app_id)
+    row = docflow_get_application(app_id)
+    if not details or not row:
+        return False, "Данные заявки не найдены", None
+    cached_url = str(details.get("yadisk_url") or "").strip()
+    if cached_url and "/client/disk" not in cached_url:
+        return True, "OK", cached_url
+
+    doc_path = Path(str(details.get("document_path") or ""))
+    uploads_root = docflow_uploads_dir(app_id)
+    base_dir = os.getenv("YANDEX_DISK_BASE_PATH", "/Infinity").strip() or "/Infinity"
+    safe_base = "/" + "/".join([p for p in base_dir.split("/") if p])
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder_name = "_".join(
+        [
+            _safe_disk_name(str(row.get("agent_name") or ""), "agent"),
+            _safe_disk_name(str(row.get("contract_no") or ""), "no-contract"),
+            _safe_disk_name(str(row.get("deal_type") or ""), "deal"),
+            str(app_id),
+            ts,
+        ]
+    )
+    remote_root = f"{safe_base}/docflow/{datetime.now().strftime('%Y-%m')}/{folder_name}"
+    private_folder_url = f"https://disk.yandex.ru/client/disk{quote(remote_root)}"
+
+    remote_doc_path = ""
+    if doc_path.exists():
+        remote_doc_path = f"{remote_root}/{doc_path.name}"
+        ok_doc, text_doc, _ = upload_file_to_yandex_disk(doc_path, remote_doc_path)
+        if not ok_doc:
+            return False, text_doc, None
+
+    if uploads_root.exists():
+        for file_path in uploads_root.rglob("*"):
+            if not file_path.is_file():
+                continue
+            rel = file_path.relative_to(uploads_root).as_posix()
+            ok_file, text_file, _ = upload_file_to_yandex_disk(file_path, f"{remote_root}/{rel}")
+            if not ok_file:
+                return False, text_file, None
+
+    ok_pub, _, text_pub = _yandex_api_json_retry("PUT", "/resources/publish", {"path": f"disk:{remote_root}"})
+    if not ok_pub and "HTTP 409" not in text_pub and "HTTP 403" not in text_pub:
+        return False, f"Папка загружена, но не опубликована: {text_pub}", None
+    ok_meta, data_meta, text_meta = _yandex_api_json_retry(
+        "GET",
+        "/resources",
+        {"path": f"disk:{remote_root}", "fields": "public_url"},
+    )
+    if ok_meta:
+        public_url = str((data_meta or {}).get("public_url") or "").strip()
+        if public_url:
+            _execute(
+                db_paths()["docflow"],
+                "UPDATE web_application_details SET yadisk_url = ?, updated_at = CURRENT_TIMESTAMP WHERE app_id = ?",
+                (public_url, app_id),
+            )
+            return True, "Пакет документов загружен в Яндекс.Диск", public_url
+
+    # fallback: try public link for protocol document
+    if remote_doc_path:
+        ok_pub_doc, _, text_pub_doc = _yandex_api_json_retry("PUT", "/resources/publish", {"path": f"disk:{remote_doc_path}"})
+        if ok_pub_doc or "HTTP 409" in text_pub_doc:
+            ok_meta_doc, data_meta_doc, _ = _yandex_api_json_retry(
+                "GET",
+                "/resources",
+                {"path": f"disk:{remote_doc_path}", "fields": "public_url"},
+            )
+            if ok_meta_doc:
+                public_doc_url = str((data_meta_doc or {}).get("public_url") or "").strip()
+                if public_doc_url:
+                    _execute(
+                        db_paths()["docflow"],
+                        "UPDATE web_application_details SET yadisk_url = ?, updated_at = CURRENT_TIMESTAMP WHERE app_id = ?",
+                        (public_doc_url, app_id),
+                    )
+                    return True, "Папка не опубликована, выдана публичная ссылка на протокол", public_doc_url
+
+    # fallback: publish archive of all files
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        zip_path = Path(tmp_dir) / f"all_documents_{app_id}.zip"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            if doc_path.exists():
+                zf.write(doc_path, arcname=doc_path.name)
+            if uploads_root.exists():
+                for file_path in uploads_root.rglob("*"):
+                    if file_path.is_file():
+                        zf.write(file_path, arcname=f"files/{file_path.relative_to(uploads_root).as_posix()}")
+        remote_zip_path = f"{remote_root}/all_documents_{app_id}.zip"
+        ok_zip, _, _ = upload_file_to_yandex_disk(zip_path, remote_zip_path)
+        if ok_zip:
+            ok_pub_zip, _, text_pub_zip = _yandex_api_json_retry("PUT", "/resources/publish", {"path": f"disk:{remote_zip_path}"})
+            if ok_pub_zip or "HTTP 409" in text_pub_zip:
+                ok_meta_zip, data_meta_zip, _ = _yandex_api_json_retry(
+                    "GET",
+                    "/resources",
+                    {"path": f"disk:{remote_zip_path}", "fields": "public_url"},
+                )
+                if ok_meta_zip:
+                    public_zip_url = str((data_meta_zip or {}).get("public_url") or "").strip()
+                    if public_zip_url:
+                        _execute(
+                            db_paths()["docflow"],
+                            "UPDATE web_application_details SET yadisk_url = ?, updated_at = CURRENT_TIMESTAMP WHERE app_id = ?",
+                            (public_zip_url, app_id),
+                        )
+                        return True, "Папка не опубликована, выдана публичная ссылка на архив документов", public_zip_url
+    if "HTTP 403" in text_pub:
+        return (
+            False,
+            "Папка загружена, но публичная ссылка запрещена токеном Я.Диск (HTTP 403). "
+            "Нужно выдать токену право публикации файлов/папок.",
+            None,
+        )
+    return False, f"Папка загружена, но не получена публичная ссылка: {text_meta}", None
+
+
+def order_pending_requests(department: str = "") -> list[dict[str, Any]]:
     db = db_paths()["order"]
     has_web = bool(_table_columns(db, "web_users"))
+    dep = department.strip()
     if has_web:
         sql = """
-        SELECT o.id, o.doc_type, o.doc_number, o.user_id, COALESCE(w.email, '') AS email, o.date, o.full_name, o.amount, o.status, COALESCE(o.comment, '') AS comment, o.created_at
+        SELECT o.id, o.doc_type, o.doc_number, o.user_id, COALESCE(w.email, '') AS email, o.date,
+               o.full_name, o.amount, o.status, COALESCE(o.comment, '') AS comment, o.created_at,
+               COALESCE(u.department, '') AS department
         FROM orders o
         LEFT JOIN web_users w ON w.telegram_id = CAST(o.user_id AS TEXT)
+        LEFT JOIN users u ON u.telegram_id = o.user_id
         WHERE o.status = 'на рассмотрении'
+        {dep_clause}
         ORDER BY o.id DESC
         LIMIT 500
         """
-        return [dict(r) for r in _query(db, sql)]
+        dep_clause = "AND COALESCE(u.department, '') = ?" if dep else ""
+        return [dict(r) for r in _query(db, sql.format(dep_clause=dep_clause), (dep,) if dep else ())]
     sql = """
-    SELECT id, doc_type, doc_number, user_id, '' AS email, date, full_name, amount, status, COALESCE(comment, '') AS comment, created_at
-    FROM orders
-    WHERE status = 'на рассмотрении'
-    ORDER BY id DESC
+    SELECT o.id, o.doc_type, o.doc_number, o.user_id, '' AS email, o.date, o.full_name, o.amount, o.status,
+           COALESCE(o.comment, '') AS comment, o.created_at, COALESCE(u.department, '') AS department
+    FROM orders o
+    LEFT JOIN users u ON u.telegram_id = o.user_id
+    WHERE o.status = 'на рассмотрении'
+    {dep_clause}
+    ORDER BY o.id DESC
     LIMIT 500
     """
-    return [dict(r) for r in _query(db, sql)]
+    dep_clause = "AND COALESCE(u.department, '') = ?" if dep else ""
+    return [dict(r) for r in _query(db, sql.format(dep_clause=dep_clause), (dep,) if dep else ())]
 
 
 def order_update_status(order_id: int, status: str, comment: str) -> tuple[bool, str]:
@@ -926,7 +1233,19 @@ def order_update_status(order_id: int, status: str, comment: str) -> tuple[bool,
 CONTRACT_START_NUMBER = 4988
 
 
+def _ensure_contracts_schema() -> None:
+    db = db_paths()["contracts"]
+    _ensure_db_file(db)
+    with sqlite3.connect(db) as conn:
+        try:
+            conn.execute("ALTER TABLE contracts ADD COLUMN signed_date TEXT")
+        except sqlite3.OperationalError:
+            pass
+        conn.commit()
+
+
 def contracts_register_user(telegram_id: int, full_name: str, department: str) -> tuple[bool, str]:
+    _ensure_contracts_schema()
     _execute(
         db_paths()["contracts"],
         "INSERT OR REPLACE INTO users (telegram_id, full_name, department) VALUES (?, ?, ?)",
@@ -947,6 +1266,7 @@ def contracts_register_web(full_name: str, department: str, email: str, account_
 
 
 def contracts_get_user(telegram_id: int) -> dict[str, Any] | None:
+    _ensure_contracts_schema()
     rows = _query(
         db_paths()["contracts"],
         "SELECT telegram_id, full_name, department FROM users WHERE telegram_id = ? LIMIT 1",
@@ -985,6 +1305,7 @@ def _sync_contract_to_google_sheets(payload: dict[str, Any]) -> tuple[bool, str]
 
 
 def contracts_create(telegram_id: int, form: str, address: str) -> tuple[bool, str]:
+    _ensure_contracts_schema()
     db = db_paths()["contracts"]
     user = _query(
         db,
@@ -1032,8 +1353,9 @@ def contracts_create(telegram_id: int, form: str, address: str) -> tuple[bool, s
 
 
 def contracts_list(user_id: int | None = None, only_active: bool = False) -> list[dict[str, Any]]:
+    _ensure_contracts_schema()
     db = db_paths()["contracts"]
-    sql = "SELECT id, number, user_id, date, form, address, status, created_at FROM contracts"
+    sql = "SELECT id, number, user_id, date, form, address, status, COALESCE(signed_date, '') AS signed_date, created_at FROM contracts"
     clauses: list[str] = []
     params: list[Any] = []
     if user_id is not None:
@@ -1048,12 +1370,23 @@ def contracts_list(user_id: int | None = None, only_active: bool = False) -> lis
 
 
 def contracts_update_status(contract_id: int, status: str) -> tuple[bool, str]:
+    _ensure_contracts_schema()
+    if str(status or "").strip().lower() == "подписан":
+        row = _query(db_paths()["contracts"], "SELECT COALESCE(signed_date, '') AS signed_date FROM contracts WHERE id = ? LIMIT 1", (contract_id,))
+        if not row:
+            return False, "Договор не найден"
+        if str(row[0]["signed_date"] or "").strip() == "":
+            return False, "Сначала укажите дату подписания"
     affected = _execute(db_paths()["contracts"], "UPDATE contracts SET status = ? WHERE id = ?", (status, contract_id))
     return (affected > 0, "Статус обновлен" if affected > 0 else "Договор не найден")
 
 
-def contracts_mark_signed_for_user(user_id: int, contract_id: int) -> tuple[bool, str]:
+def contracts_mark_signed_for_user(user_id: int, contract_id: int, signed_date: str) -> tuple[bool, str]:
+    _ensure_contracts_schema()
     db = db_paths()["contracts"]
+    clean_signed_date = str(signed_date or "").strip()
+    if clean_signed_date == "":
+        return False, "Укажите дату подписания"
     row = _query(db, "SELECT id, user_id, status FROM contracts WHERE id = ? LIMIT 1", (contract_id,))
     if not row:
         return False, "Договор не найден"
@@ -1062,7 +1395,7 @@ def contracts_mark_signed_for_user(user_id: int, contract_id: int) -> tuple[bool
         return False, "Недостаточно прав для изменения статуса"
     if str(row[0]["status"] or "").strip().lower() == "подписан":
         return True, "Статус уже установлен: Подписан"
-    affected = _execute(db, "UPDATE contracts SET status = 'Подписан' WHERE id = ?", (contract_id,))
+    affected = _execute(db, "UPDATE contracts SET status = 'Подписан', signed_date = ? WHERE id = ?", (clean_signed_date, contract_id))
     return (affected > 0, "Статус изменен на Подписан" if affected > 0 else "Не удалось обновить статус")
 
 
@@ -1079,8 +1412,69 @@ def contracts_templates() -> list[dict[str, str]]:
 
 DOCFLOW_PASSWORD = "080323"
 
+DOCFLOW_QUESTION_TEXTS: dict[str, str] = {
+    "q1": "Новорожденные дети без регистрации не проживают",
+    "q2": "На Объекте незарегистрированная перепланировка",
+    "q3": "Данные о незарегистрированной перепланировке в документах БТИ",
+    "q4": "Претензии третьих лиц в отношении прав на Объект",
+    "q5": "У собственника/пользователя есть признаки неадекватного поведения/псих.заболевания",
+    "q6": "Задолженность за электроэнергию/коммунальные платежи/капремонт",
+    "q7": "Дом планируется",
+    "q8": "Объект перед сделкой занимают",
+    "q9": "Объект продается",
+    "q10": "К моменту сделки на объекте зарегистрировано ___ человек, из них несовершеннолетних ___",
+    "q11": "Срок владения Объектом (ручной ввод)",
+    "q12": "Является единственным жильем на момент продажи",
+    "q13": "Заявление о личном участии в сделке",
+    "q14": "Средства материнского капитала на приобретение Объекта",
+    "q15": "Относится ли Объект к объектам культурного наследия",
+}
+
+DOCFLOW_QUESTION_OPTIONS: dict[str, list[str]] = {
+    "q1": ["не проживают", "проживают"],
+    "q2": ["отсутствует", "имеется"],
+    "q3": ["нет", "есть"],
+    "q4": ["отсутствуют", "имеются"],
+    "q5": ["нет", "да"],
+    "q6": ["отсутствует", "имеется"],
+    "q7": ["не планируется", "под снос"],
+    "q8": ["физически свободен", "собственники", "наниматели"],
+    "q9": ["лично собственником", "по доверенности"],
+    "q12": ["нет", "да"],
+    "q13": ["не было", "было"],
+    "q14": ["не использовались", "использовались"],
+    "q15": ["нет", "да"],
+}
+
+DOCFLOW_UPLOAD_CATEGORIES: dict[str, str] = {
+    "passport": "Паспорт",
+    "egrn": "ЕГРН",
+    "lawyer_task": "Задания от юриста",
+    "other": "Прочее",
+}
+
+
+def docflow_questionnaire() -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for i in range(1, 16):
+        key = f"q{i}"
+        items.append(
+            {
+                "key": key,
+                "title": DOCFLOW_QUESTION_TEXTS.get(key, f"Вопрос {i}"),
+                "options": DOCFLOW_QUESTION_OPTIONS.get(key, []),
+                "free_text": key not in DOCFLOW_QUESTION_OPTIONS,
+            }
+        )
+    return items
+
+
+def docflow_upload_category_map() -> dict[str, str]:
+    return dict(DOCFLOW_UPLOAD_CATEGORIES)
+
 
 def docflow_register_user(telegram_id: str, password: str, full_name: str, department_no: str) -> tuple[bool, str]:
+    _ensure_docflow_schema()
     if password != DOCFLOW_PASSWORD:
         return False, "Неверный пароль регистрации"
     db = db_paths()["docflow"]
@@ -1106,6 +1500,7 @@ def docflow_register_user(telegram_id: str, password: str, full_name: str, depar
 def docflow_register_web(
     access_password: str, full_name: str, department_no: str, email: str, account_password: str
 ) -> tuple[bool, str]:
+    _ensure_docflow_schema()
     telegram_id = generate_telegram_id("docflow", email)
     ok, text = docflow_register_user(telegram_id, access_password, full_name, department_no)
     if not ok:
@@ -1117,6 +1512,7 @@ def docflow_register_web(
 
 
 def docflow_get_user(telegram_id: str) -> dict[str, Any] | None:
+    _ensure_docflow_schema()
     db = db_paths()["docflow"]
     cols = _table_columns(db, "users")
     sql = "SELECT telegram_id, full_name, department_no, role"
@@ -1129,7 +1525,8 @@ def docflow_get_user(telegram_id: str) -> dict[str, Any] | None:
     return dict(rows[0]) if rows else None
 
 
-def docflow_pending_users() -> list[dict[str, Any]]:
+def _legacy_docflow_pending_users() -> list[dict[str, Any]]:
+    _ensure_docflow_schema()
     db = db_paths()["docflow"]
     cols = _table_columns(db, "users")
     has_web = bool(_table_columns(db, "web_users"))
@@ -1149,7 +1546,8 @@ def docflow_pending_users() -> list[dict[str, Any]]:
     return [dict(r) for r in _query(db, sql)]
 
 
-def docflow_approve_user(telegram_id: str, approve: bool) -> tuple[bool, str]:
+def _legacy_docflow_approve_user(telegram_id: str, approve: bool) -> tuple[bool, str]:
+    _ensure_docflow_schema()
     db = db_paths()["docflow"]
     cols = _table_columns(db, "users")
     if "is_approved" in cols and "is_active" in cols:
@@ -1187,6 +1585,7 @@ def docflow_create_application_full(
     object_type: str,
     head_name: str,
 ) -> tuple[bool, str, int | None]:
+    _ensure_docflow_schema()
     db = db_paths()["docflow"]
     user_cols = _table_columns(db, "users")
     user_select = "full_name"
@@ -1197,6 +1596,8 @@ def docflow_create_application_full(
         return False, "Сотрудник не найден", None
     agent_id = user[0]["id"] if "id" in user[0].keys() else None
     agent_name = str(user[0]["full_name"] or "").strip()
+    user_dep_rows = _query(db, "SELECT department_no FROM users WHERE telegram_id = ? LIMIT 1", (agent_telegram_id,))
+    department_no = str(user_dep_rows[0]["department_no"] or "").strip() if user_dep_rows else ""
     if not agent_name:
         return False, "Не заполнено ФИО сотрудника в базе", None
 
@@ -1208,6 +1609,7 @@ def docflow_create_application_full(
         "object_type": object_type,
         "head_name": head_name,
         "agent_name": agent_name,
+        "department_no": department_no,
         "status": "CREATED",
         "created_at": datetime.utcnow().isoformat(sep=" "),
         "updated_at": datetime.utcnow().isoformat(sep=" "),
@@ -1242,11 +1644,16 @@ def _docflow_details_db_table() -> None:
                 answers_json TEXT NOT NULL,
                 document_path TEXT NOT NULL,
                 uploads_json TEXT NOT NULL,
+                yadisk_url TEXT NOT NULL DEFAULT '',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        try:
+            conn.execute("ALTER TABLE web_application_details ADD COLUMN yadisk_url TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
 
@@ -1262,35 +1669,86 @@ def docflow_uploads_dir(app_id: int) -> Path:
     return uploads_dir
 
 
+def _a(answers: dict[str, str], key: str, default: str = "") -> str:
+    return str(answers.get(key, "")).strip() or default
+
+
 def docflow_generate_application_document(
     app_id: int,
     app_row: dict[str, Any],
     answers: dict[str, str],
-    uploaded_files: list[str],
+    uploaded_files: Any,
 ) -> Path:
     from docx import Document
 
     path = docflow_document_path(app_id)
     doc = Document()
-    doc.add_heading(f"Заявка #{app_id}: Протокол + документы", 0)
+    doc.add_heading("ПРОТОКОЛ ПРОВЕРКИ ОБЪЕКТА", 0)
+    doc.add_paragraph(f"Заявка № {app_id}")
     doc.add_paragraph(f"Тип сделки: {app_row.get('deal_type', '')}")
     doc.add_paragraph(f"№ договора: {app_row.get('contract_no', '')}")
     doc.add_paragraph(f"Адрес: {app_row.get('address', '')}")
-    doc.add_paragraph(f"Тип объекта: {app_row.get('object_type', '')}")
-    doc.add_paragraph(f"Руководитель: {app_row.get('head_name', '')}")
-    doc.add_paragraph(f"Агент: {app_row.get('agent_name', '')}")
+    doc.add_paragraph(f"Сотрудник: {app_row.get('agent_name', '')}")
     doc.add_paragraph("")
-    doc.add_heading("Ответы по анкете", level=1)
-    for i in range(1, 16):
-        key = f"q{i}"
-        question = f"Вопрос {i}"
-        answer = str(answers.get(key, "")).strip()
-        doc.add_paragraph(f"{question}: {answer}")
+    doc.add_paragraph("5. Обстоятельства, подлежащие проверке (обязательно для заполнения):")
+    doc.add_paragraph("Заполняется Сотрудником:")
+    doc.add_paragraph(f"1. Новорожденные дети без регистрации {_a(answers, 'q1', 'не проживают')}")
+    doc.add_paragraph(f"2. На Объекте незарегистрированная перепланировка {_a(answers, 'q2', 'отсутствует')}")
+    doc.add_paragraph(f"3. Данные о незарегистрированной перепланировке {_a(answers, 'q3', 'нет')} в документах БТИ")
+    doc.add_paragraph(f"4. Претензии третьих лиц в отношении прав на Объект {_a(answers, 'q4', 'отсутствуют')}")
+    doc.add_paragraph(
+        f"5. У собств./польз. есть признаки неадекватного поведения/ псих.заболевания {_a(answers, 'q5', 'нет')}"
+    )
+    doc.add_paragraph(f"6. Задолженность за электроэнергию/коммунальные платежи/капремонт {_a(answers, 'q6', 'нет данных')}")
+    doc.add_paragraph(f"7. Дом, планируется {_a(answers, 'q7', 'не планируется')}")
+    doc.add_paragraph(f"8. Объект перед сделкой занимают {_a(answers, 'q8', 'физически свободен')}")
+    doc.add_paragraph(f"9. Объект продается {_a(answers, 'q9', 'лично собственником')}")
+    doc.add_paragraph(f"10. К моменту сделки на объекте зарегистрировано {_a(answers, 'q10', '0')}")
+    doc.add_paragraph(f"11. Срок владения Объектом - {_a(answers, 'q11', '-')}")
+    doc.add_paragraph(f"12. Является единственным жильем на момент продажи: {_a(answers, 'q12', 'нет')}")
+    doc.add_paragraph(f"13. Заявление о личном участии в сделке: {_a(answers, 'q13', 'не было')}")
+    doc.add_paragraph(f"14. Средства материнского капитала на приобретение Объекта: {_a(answers, 'q14', 'не использовались')}")
+    doc.add_paragraph(f"15. Относится ли Объект к объектам культурного наследия: {_a(answers, 'q15', 'нет')}")
+    doc.add_paragraph("Факты установил: _________________________________")
+    doc.add_paragraph("подпись сотрудника")
+    doc.add_paragraph("")
+    doc.add_paragraph("Заполняется юристом:")
+    doc.add_paragraph("Сделки, совершенные ранее по доверенности проводились/не проводились/не установлено")
+    doc.add_paragraph("Обременения/ограничения права собственности имеются/отсутствуют")
+    doc.add_paragraph("Аресты запрещения на объект накладывались/ не накладывались / не установлено")
+    doc.add_paragraph("Судебные споры в отношении Объекта имеются/отсутствуют")
+    doc.add_paragraph("Сделки, совершенные на коротком отрезке времени проводились / не проводились / не установлено")
+    doc.add_paragraph("Исполнительные производства в отношении собственника имеются/отсутствуют/не установлено")
+    doc.add_paragraph("Сведения о недействительности паспортов участников имеются/отсутствуют")
+    doc.add_paragraph("Сведения о банкротстве/признаках неплатежеспособности собственника имеются/отсутствуют")
+    doc.add_paragraph(
+        "Лица, временно снятые с регистрационного учета присутствуют / отсутствуют / не установлено "
+        "(военная служба, заключение, безвестное отсутствие, дом престарелых, интернат)"
+    )
+    doc.add_paragraph("Собственники/пользователи/супруги в ПНД / НД состоят / не состоят / не установлено")
+    doc.add_paragraph("Пункты 12,13,14,15: проверены")
+    doc.add_paragraph("Дополнительные сведения:")
+    doc.add_paragraph("Подпись юриста:_______________")
+    doc.add_paragraph("РАЗРЕШЕНИЕ СДЕЛКИ ПО ОБЪЕКТУ:")
+    doc.add_paragraph("Юридический отдел: Разрешено / Не разрешено / Разрешено с условиями:")
+    doc.add_paragraph("___________________________________________________________________________________________")
     doc.add_paragraph("")
     doc.add_heading("Загруженные документы", level=1)
-    if uploaded_files:
+    if isinstance(uploaded_files, dict):
+        has_files = False
+        for category_key, folder_name in DOCFLOW_UPLOAD_CATEGORIES.items():
+            files = uploaded_files.get(category_key, [])
+            if not files:
+                continue
+            has_files = True
+            doc.add_paragraph(f"{folder_name}:")
+            for file_name in files:
+                doc.add_paragraph(f" - {file_name}")
+        if not has_files:
+            doc.add_paragraph("Файлы не загружены")
+    elif isinstance(uploaded_files, list) and uploaded_files:
         for file_name in uploaded_files:
-            doc.add_paragraph(file_name)
+            doc.add_paragraph(str(file_name))
     else:
         doc.add_paragraph("Файлы не загружены")
     doc.save(path)
@@ -1298,7 +1756,7 @@ def docflow_generate_application_document(
 
 
 def docflow_save_application_details(
-    app_id: int, answers: dict[str, str], document_path: Path, uploads: list[str]
+    app_id: int, answers: dict[str, str], document_path: Path, uploads: Any, yadisk_url: str = ""
 ) -> tuple[bool, str]:
     _docflow_details_db_table()
     db = db_paths()["docflow"]
@@ -1316,6 +1774,11 @@ def docflow_save_application_details(
                 """,
                 (app_id, json.dumps(answers, ensure_ascii=False), str(document_path), json.dumps(uploads, ensure_ascii=False)),
             )
+            if str(yadisk_url or "").strip():
+                conn.execute(
+                    "UPDATE web_application_details SET yadisk_url = ?, updated_at = CURRENT_TIMESTAMP WHERE app_id = ?",
+                    (str(yadisk_url).strip(), app_id),
+                )
             conn.commit()
         return True, "OK"
     except sqlite3.Error as exc:
@@ -1327,7 +1790,7 @@ def docflow_get_application_details(app_id: int) -> dict[str, Any] | None:
     db = db_paths()["docflow"]
     rows = _query(
         db,
-        "SELECT app_id, answers_json, document_path, uploads_json, created_at, updated_at FROM web_application_details WHERE app_id = ? LIMIT 1",
+        "SELECT app_id, answers_json, document_path, uploads_json, COALESCE(yadisk_url, '') AS yadisk_url, created_at, updated_at FROM web_application_details WHERE app_id = ? LIMIT 1",
         (app_id,),
     )
     if not rows:
@@ -1338,13 +1801,18 @@ def docflow_get_application_details(app_id: int) -> dict[str, Any] | None:
         "answers": json.loads(str(row.get("answers_json") or "{}")),
         "document_path": str(row.get("document_path") or ""),
         "uploads": json.loads(str(row.get("uploads_json") or "[]")),
+        "yadisk_url": str(row.get("yadisk_url") or ""),
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
 
 
-def docflow_applications_with_document_link(all_rows: bool = False, agent_telegram_id: str = "") -> list[dict[str, Any]]:
-    apps = docflow_applications() if all_rows else docflow_applications_by_user(agent_telegram_id)
+def docflow_applications_with_document_link(
+    all_rows: bool = False, agent_telegram_id: str = "", department_no: str = ""
+) -> list[dict[str, Any]]:
+    apps = docflow_applications(department_no=department_no) if all_rows else docflow_applications_by_user(
+        agent_telegram_id, department_no=department_no
+    )
     result: list[dict[str, Any]] = []
     for app in apps:
         row = dict(app)
@@ -1354,16 +1822,25 @@ def docflow_applications_with_document_link(all_rows: bool = False, agent_telegr
     return result
 
 
-def docflow_applications() -> list[dict[str, Any]]:
-    rows = _query(
-        db_paths()["docflow"],
-        "SELECT id, deal_type, contract_no, agent_name, status, created_at FROM applications ORDER BY id DESC LIMIT 500",
-    )
+def docflow_applications(department_no: str = "") -> list[dict[str, Any]]:
+    _ensure_docflow_schema()
+    dep = department_no.strip()
+    sql = """
+    SELECT id, deal_type, contract_no, agent_name, department_no, status, created_at
+    FROM applications
+    {where_clause}
+    ORDER BY id DESC
+    LIMIT 500
+    """
+    where_clause = "WHERE COALESCE(department_no, '') = ?" if dep else ""
+    rows = _query(db_paths()["docflow"], sql.format(where_clause=where_clause), (dep,) if dep else ())
     return [dict(r) for r in rows]
 
 
-def docflow_applications_by_user(agent_telegram_id: str) -> list[dict[str, Any]]:
+def docflow_applications_by_user(agent_telegram_id: str, department_no: str = "") -> list[dict[str, Any]]:
+    _ensure_docflow_schema()
     db = db_paths()["docflow"]
+    dep = department_no.strip()
     user_cols = _table_columns(db, "users")
     select_cols = "full_name"
     if "id" in user_cols:
@@ -1377,7 +1854,7 @@ def docflow_applications_by_user(agent_telegram_id: str) -> list[dict[str, Any]]
         rows = _query(
             db,
             """
-            SELECT id, deal_type, contract_no, agent_name, status, created_at
+            SELECT id, deal_type, contract_no, agent_name, department_no, status, created_at
             FROM applications
             WHERE agent_id = ? OR agent_name = ?
             ORDER BY id DESC
@@ -1389,7 +1866,7 @@ def docflow_applications_by_user(agent_telegram_id: str) -> list[dict[str, Any]]
         rows = _query(
             db,
             """
-            SELECT id, deal_type, contract_no, agent_name, status, created_at
+            SELECT id, deal_type, contract_no, agent_name, department_no, status, created_at
             FROM applications
             WHERE agent_name = ?
             ORDER BY id DESC
@@ -1397,10 +1874,72 @@ def docflow_applications_by_user(agent_telegram_id: str) -> list[dict[str, Any]]
             """,
             (full_name,),
         )
+    if dep:
+        rows = [r for r in rows if str(r["department_no"] or "").strip() == dep]
     return [dict(r) for r in rows]
 
 
-def docflow_update_status(app_id: int, status: str) -> tuple[bool, str]:
-    affected = _execute(db_paths()["docflow"], "UPDATE applications SET status = ? WHERE id = ?", (status, app_id))
+def docflow_update_status(app_id: int, status: str, department_no: str = "") -> tuple[bool, str]:
+    _ensure_docflow_schema()
+    dep = department_no.strip()
+    if dep:
+        affected = _execute(
+            db_paths()["docflow"],
+            "UPDATE applications SET status = ? WHERE id = ? AND COALESCE(department_no, '') = ?",
+            (status, app_id, dep),
+        )
+    else:
+        affected = _execute(db_paths()["docflow"], "UPDATE applications SET status = ? WHERE id = ?", (status, app_id))
     return (affected > 0, "Статус заявки обновлен" if affected > 0 else "Заявка не найдена")
+
+
+def docflow_pending_users(department_no: str = "") -> list[dict[str, Any]]:
+    _ensure_docflow_schema()
+    db = db_paths()["docflow"]
+    cols = _table_columns(db, "users")
+    has_web = bool(_table_columns(db, "web_users"))
+    dep = department_no.strip()
+    select_email = "COALESCE(w.email, '') AS email," if has_web else "'' AS email,"
+    join_web = "LEFT JOIN web_users w ON w.telegram_id = u.telegram_id" if has_web else ""
+    sql = f"SELECT {select_email} u.telegram_id, u.full_name, u.department_no, u.role"
+    if "is_approved" in cols:
+        sql += ", u.is_approved"
+    if "is_active" in cols:
+        sql += ", u.is_active"
+    sql += " FROM users u "
+    if join_web:
+        sql += join_web + " "
+    where: list[str] = []
+    params: list[Any] = []
+    if "is_approved" in cols:
+        where.append("COALESCE(u.is_approved, 0) = 0")
+    if dep:
+        where.append("COALESCE(u.department_no, '') = ?")
+        params.append(dep)
+    if where:
+        sql += "WHERE " + " AND ".join(where) + " "
+    sql += "ORDER BY u.telegram_id DESC LIMIT 300"
+    return [dict(r) for r in _query(db, sql, tuple(params))]
+
+
+def docflow_approve_user(telegram_id: str, approve: bool, department_no: str = "") -> tuple[bool, str]:
+    _ensure_docflow_schema()
+    db = db_paths()["docflow"]
+    cols = _table_columns(db, "users")
+    dep = department_no.strip()
+    dep_clause = " AND COALESCE(department_no, '') = ?" if dep else ""
+    dep_params: tuple[Any, ...] = (dep,) if dep else ()
+    if "is_approved" in cols and "is_active" in cols:
+        affected = _execute(
+            db,
+            f"UPDATE users SET is_approved = ?, is_active = ? WHERE telegram_id = ?{dep_clause}",
+            (1 if approve else 0, 1 if approve else 0, telegram_id, *dep_params),
+        )
+    elif "is_active" in cols:
+        affected = _execute(
+            db, f"UPDATE users SET is_active = ? WHERE telegram_id = ?{dep_clause}", (1 if approve else 0, telegram_id, *dep_params)
+        )
+    else:
+        affected = _execute(db, f"UPDATE users SET role = role WHERE telegram_id = ?{dep_clause}", (telegram_id, *dep_params))
+    return (affected > 0, "Статус подтверждения обновлен" if affected > 0 else "Пользователь не найден")
 

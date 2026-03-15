@@ -22,6 +22,11 @@
         <input type="password" name="password" placeholder="Пароль" required>
         <button type="submit">Войти</button>
     </form>
+    <form class="inline-form" method="post" action="/bot/order/reset-password" style="margin-top:8px">
+        <input type="email" name="email" placeholder="Email для сброса" required>
+        <input type="password" name="new_password" placeholder="Новый пароль" required>
+        <button type="submit">Сбросить пароль</button>
+    </form>
     {% if current_id %}<div class="meta" style="margin-top:8px">Роль: {{ current_role }}</div>{% endif %}
 </section>
 {% if current_id %}

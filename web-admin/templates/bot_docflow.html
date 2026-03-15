@@ -22,10 +22,15 @@
         <input type="password" name="password" placeholder="Пароль" required>
         <button type="submit">Войти</button>
     </form>
+    <form class="inline-form" method="post" action="/bot/docflow/reset-password" style="margin-top:8px">
+        <input type="email" name="email" placeholder="Email для сброса" required>
+        <input type="password" name="new_password" placeholder="Новый пароль" required>
+        <button type="submit">Сбросить пароль</button>
+    </form>
     {% if current_id %}<div class="meta" style="margin-top:8px">Роль: {{ current_role }}</div>{% endif %}
 </section>
 {% if current_id %}
-{% if can_approve %}
+{% if can_manage_users %}
 <section class="table-wrapper">
     <h2>Сотрудники на подтверждение РОП</h2>
     <table><thead><tr><th>Email</th><th>ФИО</th><th>Отдел</th><th>Роль</th><th>Действие</th></tr></thead><tbody>
@@ -50,17 +55,49 @@
     </tbody></table>
 </section>
 <section class="table-wrapper">
-    <h2>Заявки на согласование руководителем</h2>
+    <h2>Удаление пользователя</h2>
+    <form class="inline-form" method="post" action="/bot/docflow/delete-user">
+        <input type="email" name="email" placeholder="Email пользователя" required>
+        <button type="submit">Удалить пользователя</button>
+    </form>
+</section>
+{% endif %}
+{% if can_review %}
+<section class="table-wrapper">
+    <h2>{% if current_role == 'lawyer' %}Заявки, направленные юристу{% else %}Заявки на согласование руководителем{% endif %}</h2>
     <div class="meta" style="margin-bottom:10px">Новых заявок на проверку: {{ review_applications|length }}</div>
-    <table><thead><tr><th>ID</th><th>Тип сделки</th><th>№ договора</th><th>Агент</th><th>Статус</th><th>Документ</th><th>Создано</th></tr></thead><tbody>
+    <table><thead><tr><th>ID</th><th>Тип сделки</th><th>№ договора</th><th>Агент</th><th>Отдел</th><th>Статус</th><th>Действие</th><th>Документ</th><th>Создано</th></tr></thead><tbody>
     {% for a in review_applications %}
         <tr>
             <td>{{ a.id }}</td>
             <td>{{ a.deal_type }}</td>
             <td>{{ a.contract_no }}</td>
             <td>{{ a.agent_name }}</td>
+            <td>{{ a.department_no or '-' }}</td>
             <td>{{ a.status }}</td>
-            <td>{% if a.has_document %}<a href="/bot/docflow/document/{{ a.id }}">Открыть</a>{% else %}-{% endif %}</td>
+            <td>
+                <form class="inline-form" method="post" action="/bot/docflow/status">
+                    <input type="hidden" name="app_id" value="{{ a.id }}">
+                    <select name="status">
+                        {% if current_role == 'lawyer' %}
+                        <option value="LAWYER_TASK">Запросить/обновить задание юриста</option>
+                        <option value="TO_LAWYER">Оставить у юриста</option>
+                        <option value="CLOSED">Завершено</option>
+                        {% else %}
+                        <option value="TO_LAWYER">Одобрить -> Юристу</option>
+                        <option value="RETURNED_ROP">Вернуть с комментарием</option>
+                        <option value="CREATED">CREATED</option>
+                        {% endif %}
+                    </select>
+                    <button type="submit">Применить</button>
+                </form>
+            </td>
+            <td>
+                {% if a.has_document %}
+                    <a href="/bot/docflow/document/{{ a.id }}">Открыть</a><br>
+                    <a href="/bot/docflow/yadisk/{{ a.id }}" target="_blank" rel="noopener noreferrer">Я.Диск (все файлы)</a>
+                {% else %}-{% endif %}
+            </td>
             <td>{{ a.created_at }}</td>
         </tr>
     {% endfor %}
@@ -69,35 +106,68 @@
 {% endif %}
 <section class="table-wrapper">
     <h2>Создать заявку (15 вопросов + документы)</h2>
-    <form class="inline-form" method="post" action="/bot/docflow/create" enctype="multipart/form-data">
-        <input type="text" name="deal_type" placeholder="Тип сделки" required>
-        <input type="text" name="contract_no" placeholder="№ договора">
-        <input type="text" name="address" placeholder="Адрес">
-        <input type="text" name="object_type" placeholder="Тип объекта">
-        <input type="text" name="head_name" placeholder="Руководитель">
-        <input type="text" name="q1" placeholder="Вопрос 1" required>
-        <input type="text" name="q2" placeholder="Вопрос 2" required>
-        <input type="text" name="q3" placeholder="Вопрос 3" required>
-        <input type="text" name="q4" placeholder="Вопрос 4" required>
-        <input type="text" name="q5" placeholder="Вопрос 5" required>
-        <input type="text" name="q6" placeholder="Вопрос 6" required>
-        <input type="text" name="q7" placeholder="Вопрос 7" required>
-        <input type="text" name="q8" placeholder="Вопрос 8" required>
-        <input type="text" name="q9" placeholder="Вопрос 9" required>
-        <input type="text" name="q10" placeholder="Вопрос 10" required>
-        <input type="text" name="q11" placeholder="Вопрос 11" required>
-        <input type="text" name="q12" placeholder="Вопрос 12" required>
-        <input type="text" name="q13" placeholder="Вопрос 13" required>
-        <input type="text" name="q14" placeholder="Вопрос 14" required>
-        <input type="text" name="q15" placeholder="Вопрос 15" required>
-        <input type="file" name="attachments" multiple>
+    <form class="docflow-create-form" method="post" action="/bot/docflow/create" enctype="multipart/form-data">
+        <div class="docflow-meta-grid">
+            <input type="text" name="deal_type" placeholder="Тип сделки" required>
+            <input type="text" name="contract_no" placeholder="№ договора">
+            <input type="text" name="address" placeholder="Адрес">
+            <input type="text" name="object_type" placeholder="Тип объекта">
+            <input type="text" name="head_name" placeholder="Руководитель">
+        </div>
+
+        <div class="docflow-side-layout">
+            <div class="docflow-question-list">
+                {% for q in questionnaire %}
+                <div class="docflow-question-row">
+                    <label for="{{ q.key }}">{{ loop.index }}/15. {{ q.title }}</label>
+                    {% if q.free_text %}
+                    <input id="{{ q.key }}" type="text" name="{{ q.key }}" placeholder="Введите ответ" required>
+                    {% else %}
+                    <select id="{{ q.key }}" name="{{ q.key }}" required>
+                        <option value="" selected disabled>Выберите вариант</option>
+                        {% for opt in q.options %}
+                        <option value="{{ opt }}">{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            <div class="docflow-upload-panel">
+                <h3>Загрузка документов по папкам</h3>
+                <div class="meta">Можно загрузить 2+ файла в каждую категорию</div>
+                <div class="docflow-upload-list">
+                    <label>{{ upload_categories.passport }}<input type="file" name="passport_files" multiple></label>
+                    <label>{{ upload_categories.egrn }}<input type="file" name="egrn_files" multiple></label>
+                    <label>{{ upload_categories.lawyer_task }}<input type="file" name="lawyer_task_files" multiple></label>
+                    <label>{{ upload_categories.other }}<input type="file" name="other_files" multiple></label>
+                </div>
+            </div>
+        </div>
+
         <button type="submit">Создать заявку</button>
     </form>
 </section>
 <section class="table-wrapper">
     <h2>Мои заявки</h2>
     <table><thead><tr><th>ID</th><th>Тип сделки</th><th>№ договора</th><th>Агент</th><th>Статус</th><th>Документ</th><th>Создано</th></tr></thead><tbody>
-    {% for a in applications %}<tr><td>{{ a.id }}</td><td>{{ a.deal_type }}</td><td>{{ a.contract_no }}</td><td>{{ a.agent_name }}</td><td>{{ a.status }}</td><td>{% if a.has_document %}<a href="/bot/docflow/document/{{ a.id }}">Открыть</a>{% else %}-{% endif %}</td><td>{{ a.created_at }}</td></tr>{% endfor %}
+    {% for a in applications %}
+    <tr>
+        <td>{{ a.id }}</td>
+        <td>{{ a.deal_type }}</td>
+        <td>{{ a.contract_no }}</td>
+        <td>{{ a.agent_name }}</td>
+        <td>{{ a.status }}</td>
+        <td>
+            {% if a.has_document %}
+                <a href="/bot/docflow/document/{{ a.id }}">Открыть</a><br>
+                <a href="/bot/docflow/yadisk/{{ a.id }}" target="_blank" rel="noopener noreferrer">Я.Диск (все файлы)</a>
+            {% else %}-{% endif %}
+        </td>
+        <td>{{ a.created_at }}</td>
+    </tr>
+    {% endfor %}
     </tbody></table>
 </section>
 {% endif %}

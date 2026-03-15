@@ -22,6 +22,13 @@ from services.data_sources import (
     get_module_data,
     get_unified_users,
 )
+from services.notifications_service import (
+    add_notification,
+    list_notifications,
+    mark_all_read,
+    mark_read,
+    unread_count,
+)
 from services.portal_services import (
     broker_bookings,
     broker_cancel_booking,
@@ -50,9 +57,12 @@ from services.portal_services import (
     docflow_applications,
     docflow_approve_user,
     docflow_create_application,
+    docflow_questionnaire,
+    docflow_upload_category_map,
     docflow_pending_users,
     docflow_register_user,
     docflow_save_application_details,
+    docflow_upload_bundle_to_yandex,
     docflow_uploads_dir,
     docflow_update_status,
     meeting_get_user,
@@ -77,6 +87,8 @@ from services.portal_services import (
     order_pending_requests,
     order_update_status,
     web_authenticate,
+    web_delete_user,
+    web_reset_password,
     docflow_register_web,
 )
 
@@ -113,6 +125,13 @@ def _protected(request: Request) -> RedirectResponse | None:
     if not _is_authenticated(request):
         return RedirectResponse(url="/login", status_code=302)
     return None
+
+
+def _admin_common(request: Request) -> dict[str, Any]:
+    return {
+        "username": request.session.get("username", ""),
+        "notifications_unread": unread_count(),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -165,16 +184,14 @@ async def dashboard(request: Request) -> Any:
 
     data = get_dashboard_data(PROJECT_ROOT)
     users = get_unified_users(PROJECT_ROOT)
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
-            "title": "Единая веб-админка",
-            "dashboard": data,
-            "users": users[:50],
-            "username": request.session.get("username", ""),
-        },
-    )
+    payload = {
+        "request": request,
+        "title": "Единая веб-админка",
+        "dashboard": data,
+        "users": users[:50],
+        **_admin_common(request),
+    }
+    return templates.TemplateResponse("dashboard.html", payload)
 
 
 @app.get("/admin/panel", response_class=HTMLResponse)
@@ -182,17 +199,51 @@ async def admin_panel(request: Request) -> Any:
     redirect = _protected(request)
     if redirect:
         return redirect
-    return templates.TemplateResponse(
-        "admin_panel.html",
-        {
-            "request": request,
-            "title": "Панель управления",
-            "username": request.session.get("username", ""),
-            "contracts_sheet_url": "https://docs.google.com/spreadsheets/d/14u26fXTU1luO79sQmXUrQEUmlNIiUZskv0WTExOrzIM/edit?gid=0#gid=0",
-            "message": request.query_params.get("message", ""),
-            "error_message": request.query_params.get("error_message", ""),
-        },
-    )
+    payload = {
+        "request": request,
+        "title": "Панель управления",
+        "contracts_sheet_url": "https://docs.google.com/spreadsheets/d/14u26fXTU1luO79sQmXUrQEUmlNIiUZskv0WTExOrzIM/edit?gid=0#gid=0",
+        "message": request.query_params.get("message", ""),
+        "error_message": request.query_params.get("error_message", ""),
+        **_admin_common(request),
+    }
+    return templates.TemplateResponse("admin_panel.html", payload)
+
+
+@app.get("/admin/notifications", response_class=HTMLResponse)
+async def admin_notifications(request: Request) -> Any:
+    redirect = _protected(request)
+    if redirect:
+        return redirect
+    payload = {
+        "request": request,
+        "title": "Уведомления",
+        "notifications": list_notifications(limit=300),
+        "message": request.query_params.get("message", ""),
+        "error_message": request.query_params.get("error_message", ""),
+        **_admin_common(request),
+    }
+    return templates.TemplateResponse("admin_notifications.html", payload)
+
+
+@app.post("/admin/notifications/read")
+async def admin_notifications_read(request: Request, notification_id: int = Form(...)) -> RedirectResponse:
+    redirect = _protected(request)
+    if redirect:
+        return redirect
+    ok = mark_read(notification_id)
+    query = urlencode({"message" if ok else "error_message": "Отмечено как прочитанное" if ok else "Уведомление не найдено"})
+    return RedirectResponse(url=f"/admin/notifications?{query}", status_code=302)
+
+
+@app.post("/admin/notifications/read-all")
+async def admin_notifications_read_all(request: Request) -> RedirectResponse:
+    redirect = _protected(request)
+    if redirect:
+        return redirect
+    count = mark_all_read()
+    query = urlencode({"message": f"Отмечено прочитанными: {count}"})
+    return RedirectResponse(url=f"/admin/notifications?{query}", status_code=302)
 
 
 @app.post("/admin/contracts/import-sheet")
@@ -250,7 +301,7 @@ async def module_page(request: Request, module_name: str) -> Any:
                 "error": data["error"],
                 "message": message,
                 "error_message": error_message,
-                "username": request.session.get("username", ""),
+                **_admin_common(request),
             },
         )
 
@@ -268,7 +319,7 @@ async def module_page(request: Request, module_name: str) -> Any:
             "error": "",
             "message": message,
             "error_message": error_message,
-            "username": request.session.get("username", ""),
+            **_admin_common(request),
         },
     )
 
@@ -299,6 +350,26 @@ def _user_redirect(module: str, ok: bool, text: str) -> RedirectResponse:
 def _bot_redirect(module: str, ok: bool, text: str) -> RedirectResponse:
     query = urlencode({"message" if ok else "error_message": text})
     return RedirectResponse(url=f"/bot/{module}?{query}", status_code=302)
+
+
+@app.post("/bot/{module}/reset-password")
+async def bot_reset_password(module: str, email: str = Form(...), new_password: str = Form(...)) -> RedirectResponse:
+    if module not in {"meeting", "broker", "order", "contracts", "docflow"}:
+        return RedirectResponse(url="/bot", status_code=302)
+    ok, text = web_reset_password(module, email, new_password)
+    return _bot_redirect(module, ok, text)
+
+
+@app.post("/bot/docflow/delete-user")
+async def bot_docflow_delete_user(request: Request, email: str = Form(...)) -> RedirectResponse:
+    actor_id = request.session.get("docflow_user_id")
+    actor_role = str(request.session.get("docflow_user_role", "agent")).strip().lower()
+    if not actor_id:
+        return _bot_redirect("docflow", False, "Сначала выполните вход")
+    if actor_role not in {"rop", "admin"}:
+        return _bot_redirect("docflow", False, "Удаление доступно только РОП/админу")
+    ok, text = web_delete_user("docflow", email)
+    return _bot_redirect("docflow", ok, text)
 
 
 @app.get("/bot", response_class=HTMLResponse)
@@ -491,12 +562,17 @@ async def bot_order_page(request: Request) -> Any:
     current_id = request.session.get("order_user_id")
     current_role = request.session.get("order_user_role", "user")
     can_approve = current_role in {"head", "admin", "lawyer"}
-    pending_requests = order_pending_requests() if can_approve else []
+    manager_dep = str(request.session.get("order_user_department") or "").strip()
+    if can_approve and current_role != "admin":
+        pending_requests = order_pending_requests(department=manager_dep)
+    else:
+        pending_requests = order_pending_requests() if can_approve else []
     approved_for_print = []
     if can_approve:
-        approved_for_print = [
-            row for row in order_requests() if str(row.get("status", "")).strip().lower() == "одобрено"
-        ][:200]
+        approved_for_print = [row for row in order_requests() if str(row.get("status", "")).strip().lower() == "одобрено"]
+        if current_role != "admin":
+            approved_for_print = [row for row in approved_for_print if str(row.get("department") or "").strip() == manager_dep]
+        approved_for_print = approved_for_print[:200]
     return templates.TemplateResponse(
         "bot_order.html",
         {
@@ -538,6 +614,7 @@ async def bot_order_login(request: Request, email: str = Form(...), password: st
         return _bot_redirect("order", False, "Пользователь не найден")
     request.session["order_user_id"] = telegram_id
     request.session["order_user_role"] = user.get("role", "user")
+    request.session["order_user_department"] = user.get("department", "")
     return _bot_redirect("order", True, "Вход выполнен")
 
 
@@ -558,6 +635,13 @@ async def bot_order_create(
     ok, text = order_create_request(
         int(user_id), doc_type, order_date, full_name, basis_type, contract_number, contract_date, amount
     )
+    if ok:
+        add_notification(
+            category="order",
+            title="Новая заявка ПКО/РКО",
+            message=f"Поступила заявка {doc_type}. Автор: {full_name}, сумма: {amount}",
+            link="/bot/order",
+        )
     return _bot_redirect("order", ok, text)
 
 
@@ -571,7 +655,25 @@ async def bot_order_update_status(
         return _bot_redirect("order", False, "Сначала выполните вход")
     if role not in {"head", "admin", "lawyer"}:
         return _bot_redirect("order", False, "Недостаточно прав")
+    if role != "admin":
+        actor = order_get_user(int(user_id))
+        row_check = order_get_request(order_id)
+        if not actor or not row_check:
+            return _bot_redirect("order", False, "Заявка не найдена")
+        dep_actor = str(actor.get("department") or "").strip()
+        dep_row = str(row_check.get("department") or "").strip()
+        if dep_actor == "" or dep_actor != dep_row:
+            return _bot_redirect("order", False, "Можно подтверждать только заявки своего отдела")
     ok, text = order_update_status(order_id, status, comment)
+    if ok and str(status).strip().lower() in {"одобрено", "approved"}:
+        row = order_get_request(order_id)
+        if row:
+            add_notification(
+                category="order_print",
+                title="Документ подтвержден к печати",
+                message=f"Заявка #{order_id} ({row.get('doc_type', '')}) подтверждена. Можно печатать документ.",
+                link="/bot/order",
+            )
     return _bot_redirect("order", ok, text)
 
 
@@ -673,19 +775,40 @@ async def bot_contracts_create(request: Request, form: str = Form(...), address:
 
 
 @app.post("/bot/contracts/mark-signed")
-async def bot_contracts_mark_signed(request: Request, contract_id: int = Form(...)) -> RedirectResponse:
+async def bot_contracts_mark_signed(
+    request: Request, contract_id: int = Form(...), signed_date: str = Form("")
+) -> RedirectResponse:
     user_id = request.session.get("contracts_user_id")
     if not user_id:
         return _bot_redirect("contracts", False, "Сначала выполните вход")
-    ok, text = contracts_mark_signed_for_user(int(user_id), contract_id)
+    ok, text = contracts_mark_signed_for_user(int(user_id), contract_id, signed_date)
     return _bot_redirect("contracts", ok, text)
 
 
 @app.get("/bot/docflow", response_class=HTMLResponse)
 async def bot_docflow_page(request: Request) -> Any:
     current_id = request.session.get("docflow_user_id")
-    current_role = request.session.get("docflow_user_role", "agent")
-    can_approve = current_role in {"rop", "admin"}
+    current_role = str(request.session.get("docflow_user_role", "agent")).strip().lower()
+    can_manage_users = current_role in {"rop", "admin"}
+    can_review = current_role in {"rop", "admin", "lawyer"}
+    questionnaire = docflow_questionnaire()
+    upload_categories = docflow_upload_category_map()
+    manager_dep = str(request.session.get("docflow_user_department") or "").strip()
+    if current_role == "rop":
+        review_applications = docflow_applications_with_document_link(all_rows=True, department_no=manager_dep)
+        pending_users = docflow_pending_users(department_no=manager_dep)
+    elif current_role == "lawyer":
+        review_applications = docflow_applications_with_document_link(all_rows=True)
+        pending_users = []
+    else:
+        review_applications = docflow_applications_with_document_link(all_rows=True) if can_review else []
+        pending_users = docflow_pending_users() if can_manage_users else []
+    if can_review:
+        if current_role == "lawyer":
+            statuses = {"TO_LAWYER", "LAWYER_TASK"}
+        else:
+            statuses = {"CREATED", "RETURNED_ROP"}
+        review_applications = [row for row in review_applications if str(row.get("status", "")).strip().upper() in statuses]
     return templates.TemplateResponse(
         "bot_docflow.html",
         {
@@ -693,10 +816,13 @@ async def bot_docflow_page(request: Request) -> Any:
             "title": "Протокол и документы",
             "current_id": current_id,
             "current_role": current_role,
-            "can_approve": can_approve,
+            "can_manage_users": can_manage_users,
+            "can_review": can_review,
             "applications": docflow_applications_with_document_link(agent_telegram_id=str(current_id)) if current_id else [],
-            "review_applications": docflow_applications_with_document_link(all_rows=True) if can_approve else [],
-            "pending_users": docflow_pending_users() if can_approve else [],
+            "review_applications": review_applications,
+            "pending_users": pending_users,
+            "questionnaire": questionnaire,
+            "upload_categories": upload_categories,
             "message": request.query_params.get("message", ""),
             "error_message": request.query_params.get("error_message", ""),
         },
@@ -729,6 +855,7 @@ async def bot_docflow_login(request: Request, email: str = Form(...), password: 
         return _bot_redirect("docflow", False, "Учетная запись не активна")
     request.session["docflow_user_id"] = telegram_id
     request.session["docflow_user_role"] = user.get("role", "agent")
+    request.session["docflow_user_department"] = user.get("department_no", "")
     return _bot_redirect("docflow", True, "Вход выполнен")
 
 
@@ -755,6 +882,10 @@ async def bot_docflow_create(
     q13: str = Form(""),
     q14: str = Form(""),
     q15: str = Form(""),
+    passport_files: list[UploadFile] = File(default=[]),
+    egrn_files: list[UploadFile] = File(default=[]),
+    lawyer_task_files: list[UploadFile] = File(default=[]),
+    other_files: list[UploadFile] = File(default=[]),
     attachments: list[UploadFile] = File(default=[]),
 ) -> RedirectResponse:
     agent_id = request.session.get("docflow_user_id")
@@ -786,19 +917,55 @@ async def bot_docflow_create(
         all_apps = docflow_applications()
         app_row = next((a for a in all_apps if int(a.get("id") or 0) == int(app_id)), {"id": app_id, "agent_name": ""})
         uploads_dir = docflow_uploads_dir(app_id)
-        uploaded_names: list[str] = []
-        for file in attachments:
-            if file.filename is None or file.filename.strip() == "":
-                continue
-            safe_name = file.filename.replace("/", "_").replace("\\", "_")
-            target = uploads_dir / safe_name
-            content = await file.read()
-            target.write_bytes(content)
-            uploaded_names.append(safe_name)
-        doc_path = docflow_generate_application_document(app_id, app_row, answers, uploaded_names)
-        ok_save, save_text = docflow_save_application_details(app_id, answers, doc_path, uploaded_names)
+        upload_categories = docflow_upload_category_map()
+        files_by_category: dict[str, list[UploadFile]] = {
+            "passport": passport_files,
+            "egrn": egrn_files,
+            "lawyer_task": lawyer_task_files,
+            "other": other_files + attachments,
+        }
+        uploaded_files: dict[str, list[str]] = {k: [] for k in upload_categories.keys()}
+        for category_key, files in files_by_category.items():
+            folder_name = upload_categories.get(category_key, category_key)
+            target_dir = uploads_dir / folder_name
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for file in files:
+                if file.filename is None or file.filename.strip() == "":
+                    continue
+                safe_name = file.filename.replace("/", "_").replace("\\", "_")
+                target = target_dir / safe_name
+                if target.exists():
+                    stem = target.stem
+                    suffix = target.suffix
+                    idx = 1
+                    while True:
+                        candidate = target_dir / f"{stem}_{idx}{suffix}"
+                        if not candidate.exists():
+                            target = candidate
+                            break
+                        idx += 1
+                content = await file.read()
+                target.write_bytes(content)
+                uploaded_files.setdefault(category_key, []).append(target.name)
+        doc_path = docflow_generate_application_document(app_id, app_row, answers, uploaded_files)
+        ok_save, save_text = docflow_save_application_details(app_id, answers, doc_path, uploaded_files)
         if not ok_save:
             return _bot_redirect("docflow", False, f"Заявка создана, но данные анкеты не сохранены: {save_text}")
+        ok_disk, disk_text, disk_url = docflow_upload_bundle_to_yandex(app_id)
+        summary = (
+            f"Новая заявка #{app_id}. Тип: {deal_type}. Адрес: {address or '-'}. "
+            f"Сотрудник: {app_row.get('agent_name', '')}."
+        )
+        if ok_disk and disk_url:
+            summary += f" Я.Диск: {disk_url}"
+        elif not ok_disk:
+            summary += f" Я.Диск: {disk_text}"
+        add_notification(
+            category="docflow",
+            title="Новая заявка Docflow",
+            message=summary,
+            link="/bot/docflow",
+        )
         return _bot_redirect("docflow", True, "Заявка создана. Анкета и документ сохранены")
     except Exception as exc:
         return _bot_redirect("docflow", False, f"Ошибка создания заявки: {exc}")
@@ -816,7 +983,7 @@ async def bot_docflow_download_document(request: Request, app_id: int) -> Any:
     row = next((r for r in docflow_applications() if int(r.get("id") or 0) == app_id), None)
     if row is None:
         return _bot_redirect("docflow", False, "Заявка не найдена")
-    if role not in {"rop", "admin"}:
+    if role not in {"rop", "admin", "lawyer"}:
         user_apps = {int(r.get("id") or 0) for r in docflow_applications_by_user(str(agent_id))}
         if app_id not in user_apps:
             return _bot_redirect("docflow", False, "Недостаточно прав для просмотра документа")
@@ -831,6 +998,22 @@ async def bot_docflow_download_document(request: Request, app_id: int) -> Any:
     )
 
 
+@app.get("/bot/docflow/yadisk/{app_id}")
+async def bot_docflow_open_yadisk(request: Request, app_id: int) -> Any:
+    agent_id = request.session.get("docflow_user_id")
+    role = request.session.get("docflow_user_role", "agent")
+    if not agent_id:
+        return _bot_redirect("docflow", False, "Сначала выполните вход")
+    if role not in {"rop", "admin", "lawyer"}:
+        user_apps = {int(r.get("id") or 0) for r in docflow_applications_by_user(str(agent_id))}
+        if app_id not in user_apps:
+            return _bot_redirect("docflow", False, "Недостаточно прав")
+    ok, text, url = docflow_upload_bundle_to_yandex(app_id)
+    if not ok or not url:
+        return _bot_redirect("docflow", False, f"Ошибка Яндекс.Диска: {text}")
+    return RedirectResponse(url=url, status_code=302)
+
+
 @app.post("/bot/docflow/approve-user")
 async def bot_docflow_approve(request: Request, telegram_id: str = Form(...), decision: str = Form(...)) -> RedirectResponse:
     actor_id = request.session.get("docflow_user_id")
@@ -839,7 +1022,32 @@ async def bot_docflow_approve(request: Request, telegram_id: str = Form(...), de
         return _bot_redirect("docflow", False, "Сначала выполните вход")
     if actor_role not in {"rop", "admin"}:
         return _bot_redirect("docflow", False, "Недостаточно прав")
-    ok, text = docflow_approve_user(telegram_id, decision == "approve")
+    dep = "" if actor_role == "admin" else str(request.session.get("docflow_user_department") or "").strip()
+    ok, text = docflow_approve_user(telegram_id, decision == "approve", dep)
+    return _bot_redirect("docflow", ok, text)
+
+
+@app.post("/bot/docflow/status")
+async def bot_docflow_status(request: Request, app_id: int = Form(...), status: str = Form(...)) -> RedirectResponse:
+    actor_id = request.session.get("docflow_user_id")
+    actor_role = request.session.get("docflow_user_role", "agent")
+    if not actor_id:
+        return _bot_redirect("docflow", False, "Сначала выполните вход")
+    if actor_role not in {"rop", "admin", "lawyer"}:
+        return _bot_redirect("docflow", False, "Недостаточно прав")
+    dep = ""
+    if actor_role == "rop":
+        dep = str(request.session.get("docflow_user_department") or "").strip()
+    ok, text = docflow_update_status(app_id, status, dep)
+    if ok and str(status).strip().upper() == "TO_LAWYER":
+        app_row = next((a for a in docflow_applications() if int(a.get("id") or 0) == int(app_id)), None)
+        if app_row:
+            add_notification(
+                category="docflow_lawyer",
+                title="Заявка направлена юристу",
+                message=f"Заявка #{app_id} направлена юристу. Тип: {app_row.get('deal_type', '')}, агент: {app_row.get('agent_name', '')}",
+                link="/bot/docflow",
+            )
     return _bot_redirect("docflow", ok, text)
 
 @app.get("/portal", response_class=HTMLResponse)
@@ -849,7 +1057,7 @@ async def portal_home(request: Request) -> Any:
         return redirect
     return templates.TemplateResponse(
         "portal_home.html",
-        {"request": request, "title": "Портал модулей", "username": request.session.get("username", "")},
+        {"request": request, "title": "Портал модулей", **_admin_common(request)},
     )
 
 
@@ -863,7 +1071,15 @@ async def user_home(request: Request) -> Any:
 
 @app.get("/user/logout")
 async def user_logout(request: Request) -> RedirectResponse:
-    for key in ["meeting_user_id", "broker_user_id", "order_user_id", "contracts_user_id", "docflow_user_id"]:
+    for key in [
+        "meeting_user_id",
+        "broker_user_id",
+        "order_user_id",
+        "contracts_user_id",
+        "docflow_user_id",
+        "order_user_department",
+        "docflow_user_department",
+    ]:
         request.session.pop(key, None)
     return RedirectResponse(url="/user", status_code=302)
 
@@ -1006,6 +1222,13 @@ async def user_order_create(
     ok, text = order_create_request(
         int(user_id), doc_type, order_date, full_name, basis_type, contract_number, contract_date, amount
     )
+    if ok:
+        add_notification(
+            category="order",
+            title="Новая заявка ПКО/РКО",
+            message=f"Поступила заявка {doc_type}. Автор: {full_name}, сумма: {amount}",
+            link="/portal/order",
+        )
     return _user_redirect("order", ok, text)
 
 
@@ -1084,6 +1307,13 @@ async def user_docflow_create(
     if not agent_id:
         return _user_redirect("docflow", False, "Сначала выполните вход")
     ok, text = docflow_create_application(str(agent_id), deal_type, contract_no, address, object_type, head_name)
+    if ok:
+        add_notification(
+            category="docflow",
+            title="Новая заявка Docflow",
+            message=f"Поступила заявка по типу сделки: {deal_type}",
+            link="/portal/docflow",
+        )
     return _user_redirect("docflow", ok, text)
 
 
@@ -1103,7 +1333,7 @@ async def portal_meeting(request: Request) -> Any:
             "all_bookings": meeting_bookings(all_rows=True),
             "message": request.query_params.get("message", ""),
             "error_message": request.query_params.get("error_message", ""),
-            "username": request.session.get("username", ""),
+            **_admin_common(request),
         },
     )
 
@@ -1156,7 +1386,7 @@ async def portal_broker(request: Request) -> Any:
             "all_bookings": broker_bookings(all_rows=True),
             "message": request.query_params.get("message", ""),
             "error_message": request.query_params.get("error_message", ""),
-            "username": request.session.get("username", ""),
+            **_admin_common(request),
         },
     )
 
@@ -1208,7 +1438,7 @@ async def portal_order(request: Request) -> Any:
             "requests": order_requests(),
             "message": request.query_params.get("message", ""),
             "error_message": request.query_params.get("error_message", ""),
-            "username": request.session.get("username", ""),
+            **_admin_common(request),
         },
     )
 
@@ -1235,12 +1465,28 @@ async def portal_order_create(
     ok, text = order_create_request(
         telegram_id, doc_type, order_date, full_name, basis_type, contract_number, contract_date, amount
     )
+    if ok:
+        add_notification(
+            category="order",
+            title="Новая заявка ПКО/РКО",
+            message=f"Поступила заявка {doc_type}. Автор: {full_name}, сумма: {amount}",
+            link="/portal/order",
+        )
     return _portal_redirect("order", ok, text)
 
 
 @app.post("/portal/order/status")
 async def portal_order_status(order_id: int = Form(...), status: str = Form(...), comment: str = Form("")) -> RedirectResponse:
     ok, text = order_update_status(order_id, status, comment)
+    if ok and str(status).strip().lower() in {"одобрено", "approved"}:
+        row = order_get_request(order_id)
+        if row:
+            add_notification(
+                category="order_print",
+                title="Документ подтвержден к печати",
+                message=f"Заявка #{order_id} ({row.get('doc_type', '')}) подтверждена. Можно печатать документ.",
+                link="/portal/order",
+            )
     return _portal_redirect("order", ok, text)
 
 
@@ -1295,7 +1541,7 @@ async def portal_contracts(request: Request) -> Any:
             "templates_list": contracts_templates(),
             "message": request.query_params.get("message", ""),
             "error_message": request.query_params.get("error_message", ""),
-            "username": request.session.get("username", ""),
+            **_admin_common(request),
         },
     )
 
@@ -1342,7 +1588,7 @@ async def portal_docflow(request: Request) -> Any:
             "applications": docflow_applications(),
             "message": request.query_params.get("message", ""),
             "error_message": request.query_params.get("error_message", ""),
-            "username": request.session.get("username", ""),
+            **_admin_common(request),
         },
     )
 
@@ -1371,10 +1617,26 @@ async def portal_docflow_create(
     head_name: str = Form(""),
 ) -> RedirectResponse:
     ok, text = docflow_create_application(agent_telegram_id, deal_type, contract_no, address, object_type, head_name)
+    if ok:
+        add_notification(
+            category="docflow",
+            title="Новая заявка Docflow",
+            message=f"Поступила заявка по типу сделки: {deal_type}",
+            link="/portal/docflow",
+        )
     return _portal_redirect("docflow", ok, text)
 
 
 @app.post("/portal/docflow/status")
 async def portal_docflow_status(app_id: int = Form(...), status: str = Form(...)) -> RedirectResponse:
     ok, text = docflow_update_status(app_id, status)
+    if ok and str(status).strip().upper() == "TO_LAWYER":
+        app_row = next((a for a in docflow_applications() if int(a.get("id") or 0) == int(app_id)), None)
+        if app_row:
+            add_notification(
+                category="docflow_lawyer",
+                title="Заявка направлена юристу",
+                message=f"Заявка #{app_id} направлена юристу. Тип: {app_row.get('deal_type', '')}, агент: {app_row.get('agent_name', '')}",
+                link="/portal/docflow",
+            )
     return _portal_redirect("docflow", ok, text)

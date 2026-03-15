@@ -27,10 +27,13 @@ def _db_paths(project_root: Path) -> dict[str, Path]:
 def _query(db_path: Path, sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
     if not db_path.exists():
         return []
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute(sql, params)
-        return cur.fetchall()
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(sql, params)
+            return cur.fetchall()
+    except sqlite3.Error:
+        return []
 
 
 def _count(db_path: Path, table_name: str) -> int:

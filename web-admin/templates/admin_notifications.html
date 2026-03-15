@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Уведомления админки</h1>
+    <p>Новые события из модулей ПКО/РКО и Docflow.</p>
+</section>
+
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <form class="inline-form" method="post" action="/admin/notifications/read-all" style="margin-bottom:10px;">
+        <button type="submit">Отметить все прочитанными</button>
+    </form>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Категория</th>
+                <th>Заголовок</th>
+                <th>Сообщение</th>
+                <th>Создано</th>
+                <th>Статус</th>
+                <th>Действие</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for n in notifications %}
+            <tr>
+                <td>{{ n.id }}</td>
+                <td>{{ n.category }}</td>
+                <td>{{ n.title }}</td>
+                <td>{{ n.message }}</td>
+                <td>{{ n.created_at }}</td>
+                <td>{% if n.is_read %}прочитано{% else %}новое{% endif %}</td>
+                <td>
+                    {% if n.link %}
+                        <a href="{{ n.link }}">Открыть</a>
+                    {% endif %}
+                    {% if not n.is_read %}
+                        <form class="inline-form" method="post" action="/admin/notifications/read" style="display:inline-flex; margin-left:8px;">
+                            <input type="hidden" name="notification_id" value="{{ n.id }}">
+                            <button type="submit">Прочитано</button>
+                        </form>
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        {% if not notifications %}
+            <tr><td colspan="7">Уведомлений пока нет</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}
