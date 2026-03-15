@@ -1,0 +1,71 @@
+{% extends "bot_base.html" %}
+{% block content %}
+<section class="page-header">
+    <h1>Диалог по заявке #{{ app_row.id }}</h1>
+    <p>Тип сделки: {{ app_row.deal_type }} | № договора: {{ app_row.contract_no }} | Статус: {{ app_row.status }}</p>
+</section>
+{% if message %}<div class="success">{{ message }}</div>{% endif %}
+{% if error_message %}<div class="error">{{ error_message }}</div>{% endif %}
+
+<section class="table-wrapper">
+    <h2>Документы</h2>
+    <div class="inline-form">
+        <a href="/bot/docflow/document/{{ app_row.id }}">Открыть протокол</a>
+        <a href="/bot/docflow/yadisk/{{ app_row.id }}" target="_blank" rel="noopener noreferrer">Открыть Я.Диск</a>
+        <a href="/bot/docflow">Назад к списку</a>
+    </div>
+</section>
+
+{% if current_role in ['lawyer', 'admin', 'rop'] %}
+<section class="table-wrapper">
+    <h2>Задание юриста</h2>
+    <form method="post" action="/bot/docflow/thread/{{ app_row.id }}/task" class="inline-form">
+        <input type="text" name="task_text" placeholder="Введите или обновите задание юриста" required style="min-width:380px;">
+        <button type="submit">Сохранить задание</button>
+    </form>
+</section>
+{% endif %}
+
+<section class="table-wrapper">
+    <h2>Лента взаимодействия</h2>
+    <table>
+        <thead>
+            <tr><th>Время</th><th>Роль</th><th>Автор</th><th>Тип</th><th>Сообщение</th><th>Файлы</th></tr>
+        </thead>
+        <tbody>
+        {% for e in events %}
+            <tr>
+                <td>{{ e.created_at }}</td>
+                <td>{{ e.actor_role }}</td>
+                <td>{{ e.actor_name }}</td>
+                <td>{{ e.event_type }}</td>
+                <td>{{ e.message or '-' }}</td>
+                <td>
+                    {% if e.file_paths %}
+                        {% for p in e.file_paths %}
+                            <div>{{ p }}</div>
+                        {% endfor %}
+                    {% else %}
+                        -
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        {% if not events %}
+            <tr><td colspan="6">Пока нет сообщений</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+</section>
+
+<section class="table-wrapper">
+    <h2>Добавить сообщение / файлы</h2>
+    <form method="post" action="/bot/docflow/thread/{{ app_row.id }}/message" enctype="multipart/form-data">
+        <div class="inline-form">
+            <input type="text" name="message_text" placeholder="Комментарий" style="min-width:380px;">
+            <input type="file" name="files" multiple>
+            <button type="submit">Отправить</button>
+        </div>
+    </form>
+</section>
+{% endblock %}

@@ -33,6 +33,22 @@
 </section>
 
 <section class="table-wrapper">
+    <h2>Удаление пользователя (общий инструмент)</h2>
+    <form class="inline-form" method="post" action="/admin/users/delete" style="margin: 10px 0 20px;">
+        <input type="email" name="email" placeholder="Email пользователя" required>
+        <select name="module" required>
+            <option value="all">Все модули</option>
+            <option value="meeting">Переговорные</option>
+            <option value="broker">Брокеры</option>
+            <option value="order">ПКО/РКО</option>
+            <option value="contracts">Договоры</option>
+            <option value="docflow">Протокол</option>
+        </select>
+        <button type="submit">Удалить пользователя</button>
+    </form>
+</section>
+
+<section class="table-wrapper">
     <h2>Google Sheets реестр договоров</h2>
     {% if message %}
     <p class="success">{{ message }}</p>

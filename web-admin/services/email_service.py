@@ -24,6 +24,8 @@ def _recipients_for_category(category: str) -> list[str]:
         return _split_recipients(os.getenv("EMAIL_CASHIER_TO", ""))
     if cat == "docflow_lawyer":
         return _split_recipients(os.getenv("EMAIL_DOCFLOW_LAWYER_TO", ""))
+    if cat == "docflow_agent_task":
+        return _split_recipients(os.getenv("EMAIL_DOCFLOW_AGENT_TO", ""))
     return _split_recipients(os.getenv("EMAIL_DEFAULT_TO", ""))
 
 

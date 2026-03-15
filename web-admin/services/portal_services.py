@@ -1807,6 +1807,193 @@ def docflow_get_application_details(app_id: int) -> dict[str, Any] | None:
     }
 
 
+def _ensure_docflow_exchange_schema() -> None:
+    _ensure_docflow_schema()
+    db = db_paths()["docflow"]
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS web_application_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_id INTEGER NOT NULL,
+                actor_telegram_id TEXT NOT NULL DEFAULT '',
+                actor_name TEXT NOT NULL DEFAULT '',
+                actor_role TEXT NOT NULL DEFAULT '',
+                event_type TEXT NOT NULL DEFAULT 'COMMENT',
+                message TEXT NOT NULL DEFAULT '',
+                file_paths_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS web_user_notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_telegram_id TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'docflow',
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                link TEXT NOT NULL DEFAULT '',
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_web_app_events_app_id ON web_application_events(app_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_web_user_notifications_user_id ON web_user_notifications(user_telegram_id, is_read)"
+        )
+        conn.commit()
+
+
+def docflow_get_application(app_id: int) -> dict[str, Any] | None:
+    _ensure_docflow_schema()
+    rows = _query(
+        db_paths()["docflow"],
+        """
+        SELECT id, agent_id, agent_name, department_no, deal_type, contract_no, status, created_at
+        FROM applications
+        WHERE id = ?
+        LIMIT 1
+        """,
+        (app_id,),
+    )
+    return dict(rows[0]) if rows else None
+
+
+def docflow_get_agent_telegram_id(app_id: int) -> str:
+    app_row = docflow_get_application(app_id)
+    if not app_row:
+        return ""
+    db = db_paths()["docflow"]
+    user_cols = _table_columns(db, "users")
+    try:
+        if "id" in user_cols and app_row.get("agent_id") not in {None, ""}:
+            rows = _query(db, "SELECT telegram_id FROM users WHERE id = ? LIMIT 1", (int(app_row["agent_id"]),))
+            if rows:
+                return str(rows[0]["telegram_id"] or "")
+    except (TypeError, ValueError):
+        pass
+    agent_name = str(app_row.get("agent_name") or "").strip()
+    if agent_name:
+        rows = _query(db, "SELECT telegram_id FROM users WHERE full_name = ? ORDER BY id DESC LIMIT 1", (agent_name,))
+        if rows:
+            return str(rows[0]["telegram_id"] or "")
+    return ""
+
+
+def docflow_add_event(
+    app_id: int,
+    actor_telegram_id: str,
+    actor_name: str,
+    actor_role: str,
+    event_type: str,
+    message: str,
+    file_paths: list[str] | None = None,
+) -> tuple[bool, str]:
+    _ensure_docflow_exchange_schema()
+    app_row = docflow_get_application(app_id)
+    if not app_row:
+        return False, "Заявка не найдена"
+    event_type_clean = str(event_type or "COMMENT").strip().upper()
+    message_clean = str(message or "").strip()
+    files_clean = [str(p).strip() for p in (file_paths or []) if str(p).strip()]
+    if message_clean == "" and not files_clean:
+        return False, "Сообщение или файл обязательны"
+    affected = _execute(
+        db_paths()["docflow"],
+        """
+        INSERT INTO web_application_events (app_id, actor_telegram_id, actor_name, actor_role, event_type, message, file_paths_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            app_id,
+            str(actor_telegram_id or "").strip(),
+            str(actor_name or "").strip(),
+            str(actor_role or "").strip().lower(),
+            event_type_clean,
+            message_clean,
+            json.dumps(files_clean, ensure_ascii=False),
+        ),
+    )
+    return (affected > 0, "Событие сохранено" if affected > 0 else "Не удалось сохранить событие")
+
+
+def docflow_events(app_id: int, limit: int = 300) -> list[dict[str, Any]]:
+    _ensure_docflow_exchange_schema()
+    rows = _query(
+        db_paths()["docflow"],
+        """
+        SELECT id, app_id, actor_telegram_id, actor_name, actor_role, event_type, message, file_paths_json, created_at
+        FROM web_application_events
+        WHERE app_id = ?
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (app_id, max(int(limit), 1)),
+    )
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["file_paths"] = json.loads(str(item.get("file_paths_json") or "[]"))
+        except json.JSONDecodeError:
+            item["file_paths"] = []
+        result.append(item)
+    return result
+
+
+def docflow_add_user_notification(
+    user_telegram_id: str,
+    title: str,
+    message: str,
+    link: str = "",
+    category: str = "docflow",
+) -> None:
+    _ensure_docflow_exchange_schema()
+    _execute(
+        db_paths()["docflow"],
+        """
+        INSERT INTO web_user_notifications (user_telegram_id, category, title, message, link, is_read)
+        VALUES (?, ?, ?, ?, ?, 0)
+        """,
+        (
+            str(user_telegram_id or "").strip(),
+            str(category or "docflow").strip(),
+            str(title or "").strip(),
+            str(message or "").strip(),
+            str(link or "").strip(),
+        ),
+    )
+
+
+def docflow_user_notifications(user_telegram_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    _ensure_docflow_exchange_schema()
+    rows = _query(
+        db_paths()["docflow"],
+        """
+        SELECT id, category, title, message, link, is_read, created_at
+        FROM web_user_notifications
+        WHERE user_telegram_id = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (str(user_telegram_id or "").strip(), max(int(limit), 1)),
+    )
+    return [dict(r) for r in rows]
+
+
+def docflow_mark_user_notification_read(user_telegram_id: str, notification_id: int) -> bool:
+    _ensure_docflow_exchange_schema()
+    affected = _execute(
+        db_paths()["docflow"],
+        "UPDATE web_user_notifications SET is_read = 1 WHERE id = ? AND user_telegram_id = ?",
+        (notification_id, str(user_telegram_id or "").strip()),
+    )
+    return affected > 0
+
+
 def docflow_applications_with_document_link(
     all_rows: bool = False, agent_telegram_id: str = "", department_no: str = ""
 ) -> list[dict[str, Any]]:

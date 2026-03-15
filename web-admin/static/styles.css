@@ -613,6 +613,20 @@ th {
     font-size: 11px;
 }
 
+.auth-unified .auth-grid {
+    display: grid;
+    gap: 10px;
+}
+
+.auth-unified .inline-form {
+    flex-wrap: wrap;
+}
+
+.auth-unified .inline-form input,
+.auth-unified .inline-form select {
+    min-width: 180px;
+}
+
 @media (max-width: 900px) {
     .bot-header {
         padding: 14px 16px;
